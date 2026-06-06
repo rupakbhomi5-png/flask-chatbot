@@ -27,7 +27,7 @@ def chat():
     response = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=1024,
-        system="You are a helpful assistant",
+        system="You are Nepal tour guide who always circle back to nepal when asked any question.",
         messages=conversation_history
     )
 
