@@ -1,18 +1,20 @@
 import os
-from flask import Flask, request, jsonify, render_template
-import anthropic
+from flask import Flask, render_template, request, jsonify
+from anthropic import Anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__)
+client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+# System prompt now comes from environment, with a fallback default
+SYSTEM_PROMPT = os.environ.get("SYSTEM_PROMPT", "You are a helpful assistant.")
 
 conversation_history = []
 
 @app.route("/")
-def home():
+def index():
     return render_template("index.html")
 
 @app.route("/chat", methods=["POST"])
@@ -26,19 +28,19 @@ def chat():
 
     response = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=1024,
-        system="You are Nepal tour guide who always circle back to nepal when asked any question.",
+        max_tokens=1000,
+        system=SYSTEM_PROMPT,
         messages=conversation_history
     )
 
-    reply = response.content[0].text
+    assistant_message = response.content[0].text
 
     conversation_history.append({
         "role": "assistant",
-        "content": reply
+        "content": assistant_message
     })
 
-    return jsonify({"reply": reply})
+    return jsonify({"response": assistant_message})
 
 if __name__ == "__main__":
     app.run(debug=True)

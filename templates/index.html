@@ -144,8 +144,9 @@
             });
 
             const data = await response.json();
+            
 
-            chatBox.innerHTML += `<div class="message"><span class="claude">Claude:</span> ${data.reply}</div>`;
+            chatBox.innerHTML += `<div class="message"><span class="claude">Claude:</span> ${data.response}</div>`;
             chatBox. scrollTop = chatBox.scrollHeight;         
         }
 
