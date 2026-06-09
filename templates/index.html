@@ -3,7 +3,6 @@
 <head>
     <title>My AI Chatbot</title>
     <style>
-        /* Base Page Setup */
         body {
             font-family: 'Segoe UI', Arial, sans-serif;
             background-color: #f0f4f8;
@@ -11,17 +10,15 @@
             padding: 40px 20px;
         }
 
-        /* Main Wrapper */
         .chat-container {
             max-width: 800px;
-            margin: 0 auto; /* Centers the whole block */
+            margin: 0 auto;
             background: #ffffff;
             border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.05);
             padding: 20px;
         }
 
-        /* Title Styling */
         h1 {
             color: #1a1a1a;
             margin-top: 0;
@@ -32,7 +29,6 @@
             padding-bottom: 15px;
         }
 
-        /* The Chat History Box */
         #chat-box {
             background-color: #fafbfc;
             border: 1px solid #e1e4e8;
@@ -43,19 +39,17 @@
             margin-bottom: 20px;
         }
 
-        /* General Message Formatting */
         .message {
             margin-bottom: 20px;
             padding: 15px;
             border-radius: 8px;
             line-height: 1.5;
-            clear: both; /* Prevents floating issues */
+            clear: both;
         }
 
-        /* User Message */
         .user {
-            background-color: #e6f2ff; /* Light blue background */
-            border-left: 4px solid #0066cc; /* Blue accent line */
+            background-color: #e6f2ff;
+            border-left: 4px solid #0066cc;
             color: #003366;
         }
 
@@ -66,10 +60,9 @@
             display: block;
         }
 
-        /* Claude/Bot Message */
         .claude {
-            background-color: #f6f8fa; /* Light gray background */
-            border-left: 4px solid #24292e; /* Dark accent line */
+            background-color: #f6f8fa;
+            border-left: 4px solid #24292e;
             color: #24292e;
         }
 
@@ -80,7 +73,6 @@
             display: block;
         }
 
-        /* Input Area Setup */
         #input-area {
             display: flex;
             gap: 10px;
@@ -120,34 +112,43 @@
 <body>
     <h1>My AI Chatbot</h1>
 
-    <div id="chat-box"</div>
+    <div id="chat-box"></div>
 
     <div id="input-area">
         <input type="text" id="user-input" placeholder="Type your message here..."/>
         <button onclick="sendMessage()">Send</button>
     </div>
+
     <script>
         async function sendMessage() {
             const input = document.getElementById("user-input");
             const chatBox = document.getElementById("chat-box");
             const message = input.value.trim();
 
-            if (!message) return;
+            if (!message) {
+                chatBox.innerHTML += `<div class="message claude"><span class="claude-label">Error:</span> Please type a message first.</div>`;
+                return;
+            }
 
-            chatBox.innerHTML += `<div class="message"><span class="user">You:</span> ${message}</div>`;
+            chatBox.innerHTML += `<div class="message user"><span class="user-label">You:</span> ${message}</div>`;
             input.value = "";
 
             const response = await fetch("/chat", {
                 method: "POST",
-                headers: { "Content-Type": "application/json"},
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ message: message })
             });
 
             const data = await response.json();
-            
 
-            chatBox.innerHTML += `<div class="message"><span class="claude">Claude:</span> ${data.response}</div>`;
-            chatBox. scrollTop = chatBox.scrollHeight;         
+            if (data.error) {
+                chatBox.innerHTML += `<div class="message claude"><span class="claude-label">Error:</span> ${data.error}</div>`;
+            } else {
+                chatBox.innerHTML += `<div class="message claude"><span class="claude-label">AI:</span> ${data.reply}</div>`;
+            }
+
+            chatBox.scrollTop = chatBox.scrollHeight;
+            input.focus();
         }
 
         document.getElementById("user-input").addEventListener("keypress", function(e) {
