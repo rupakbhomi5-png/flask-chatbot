@@ -27,7 +27,7 @@ def index():
     return render_template("index.html")
 
 @app.route("/chat", methods=["POST"])
-@limiter.limit("10 per minute")
+@limiter.limit("3 per minute")
 def chat():
     data = request.json
 
