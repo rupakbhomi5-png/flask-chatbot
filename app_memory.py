@@ -73,7 +73,7 @@ def chat():
         conversation_history.pop()
         return jsonify({"error": "Could not connect to AI service. Check your internet."}), 503
     
-    except anthropic.APIStatusError:
+    except anthropic.APIStatusError as e:
         conversation_history.pop()
         return jsonify({"error": f"API error: {e.status_code}"}), 500
     
