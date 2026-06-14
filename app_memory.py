@@ -1,6 +1,6 @@
 import os
 import anthropic
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, session
 from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -8,7 +8,7 @@ from flask_limiter.util import get_remote_address
 load_dotenv(override=True)
 
 app = Flask (__name__)
-
+app.secret_key = os.environ.get("SECRET_KEY")
 #Rate Limiter setup
 limiter = Limiter(
     get_remote_address,
@@ -20,8 +20,6 @@ client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
 SYSTEM_PROMPT = os.environ.get("SYSTEM_PROMPT", "You are a helpful assistant.")
 
-conversation_history = []
-
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -29,6 +27,10 @@ def index():
 @app.route("/chat", methods=["POST"])
 @limiter.limit("10 per minute")
 def chat():
+    if "history" not in session:
+        session["history"]=[]
+        
+    conversation_history = session["history"]
     data = request.json
 
     if not data or not data.get("message"):
@@ -58,6 +60,8 @@ def chat():
             "role": "assistant",
             "content": assistant_reply
         })
+        session["history"]= conversation_history
+        session.modified = True
 
         return jsonify({"reply": assistant_reply})
     
