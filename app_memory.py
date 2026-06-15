@@ -1,4 +1,5 @@
 import os
+import json
 import anthropic
 from flask import Flask, request, jsonify, render_template, session
 from dotenv import load_dotenv
@@ -17,8 +18,36 @@ limiter = Limiter(
 )
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+def build_system_prompt():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(base_dir, "products.json"), "r") as f:
+        data = json.load(f)
+    
+    product_list = "\n".join(
+        f"- {p['name']}: NPR {p['price']:,}"
+        for p in data["products"]
+    )
 
-SYSTEM_PROMPT = os.environ.get("SYSTEM_PROMPT", "You are a helpful assistant.")
+    return f'''You are Ramcha, a customer service agent for {data['store_name']}, \
+an electronics retail store in {data['location']}.
+
+STORE INFORMATION:
+- Hours: {data['hours']}
+- Location: {data['location']}
+- Contact: {data['contact']}
+- Return Policy: {data['return_policy']}
+
+PRODUCTS WE SELL:
+{product_list}
+
+WHAT YOU MUST NEVER DO:
+- Never invent products we don't sell
+- Never quote prices not listed above - say "please contact us at {data['contact']} for current pricing"
+- Never promise stock availability
+- For specialized items not on this list, always direct customer to call {data['contact']}
+
+Keep response under 3 sentences. Be friendly but precise.''' 
+SYSTEM_PROMPT = build_system_prompt()
 
 @app.route("/")
 def index():
@@ -49,7 +78,7 @@ def chat():
     try:
         response = client.messages.create(
             model="claude-haiku-4-5",
-            max_tokens=1024,
+            max_tokens=300,
             system=SYSTEM_PROMPT,
             messages=conversation_history
         )
