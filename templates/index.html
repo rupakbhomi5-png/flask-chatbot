@@ -117,6 +117,7 @@
     <div id="input-area">
         <input type="text" id="user-input" placeholder="Type your message here..."/>
         <button onclick="sendMessage()">Send</button>
+        <button onclick="resetChat()" style="background-color: #cc3300;">Reset</button>
     </div>
 
     <script>
@@ -149,6 +150,11 @@
 
             chatBox.scrollTop = chatBox.scrollHeight;
             input.focus();
+        }
+
+        async function resetChat() {
+            await fetch('/reset', {method: 'POST'});
+            document.getElementById("chat-box").innerHTML = "";
         }
 
         document.getElementById("user-input").addEventListener("keypress", function(e) {

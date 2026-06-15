@@ -113,6 +113,11 @@ def chat():
     except Exception as e:
         conversation_history.pop()
         return jsonify({"error": "Something went wrong. Please try again."}), 500
+
+@app.route('/reset', methods=['POST'])
+def reset():
+    session.clear()
+    return jsonify({"message": "Conversation reset."})
     
 @app.errorhandler(429)
 def rate_limit_handler(e):
