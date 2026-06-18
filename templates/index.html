@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>My AI Chatbot</title>
+    <title>Raj Cassette</title>
     <style>
         body {
             font-family: 'Segoe UI', Arial, sans-serif;
@@ -110,46 +110,64 @@
     </style>
 </head>
 <body>
-    <h1>My AI Chatbot</h1>
+    <div class="chat-container">
+        <h1>Raj Cassette</h1>
 
-    <div id="chat-box"></div>
+        <div id="chat-box"></div>
 
-    <div id="input-area">
-        <input type="text" id="user-input" placeholder="Type your message here..."/>
-        <button onclick="sendMessage()">Send</button>
-        <button onclick="resetChat()" style="background-color: #cc3300;">Reset</button>
+        <div id="input-area">
+            <input type="text" id="user-input" placeholder="Type your message here..."/>
+            <button id="send-btn" onclick="sendMessage()">Send</button>
+            <button onclick="resetChat()" style="background-color: #cc3300;">Reset</button>
+        </div>
     </div>
 
     <script>
+        function escapeHtml(str) {
+            const div = document.createElement("div");
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
         async function sendMessage() {
             const input = document.getElementById("user-input");
+            const sendBtn = document.getElementById("send-btn");
             const chatBox = document.getElementById("chat-box");
             const message = input.value.trim();
 
             if (!message) {
                 chatBox.innerHTML += `<div class="message claude"><span class="claude-label">Error:</span> Please type a message first.</div>`;
+                chatBox.scrollTop = chatBox.scrollHeight;
                 return;
             }
 
-            chatBox.innerHTML += `<div class="message user"><span class="user-label">You:</span> ${message}</div>`;
+            chatBox.innerHTML += `<div class="message user"><span class="user-label">You:</span> ${escapeHtml(message)}</div>`;
             input.value = "";
+            sendBtn.disabled = true;
+            sendBtn.textContent = "...";
 
-            const response = await fetch("/chat", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: message })
-            });
+            try {
+                const response = await fetch("/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ message: message })
+                });
 
-            const data = await response.json();
+                const data = await response.json();
 
-            if (data.error) {
-                chatBox.innerHTML += `<div class="message claude"><span class="claude-label">Error:</span> ${data.error}</div>`;
-            } else {
-                chatBox.innerHTML += `<div class="message claude"><span class="claude-label">AI:</span> ${data.reply}</div>`;
+                if (data.error) {
+                    chatBox.innerHTML += `<div class="message claude"><span class="claude-label">Error:</span> ${escapeHtml(data.error)}</div>`;
+                } else {
+                    chatBox.innerHTML += `<div class="message claude"><span class="claude-label">Ramcha:</span> ${escapeHtml(data.reply)}</div>`;
+                }
+            } catch (err) {
+                chatBox.innerHTML += `<div class="message claude"><span class="claude-label">Error:</span> Network error. Please try again.</div>`;
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.textContent = "Send";
+                chatBox.scrollTop = chatBox.scrollHeight;
+                input.focus();
             }
-
-            chatBox.scrollTop = chatBox.scrollHeight;
-            input.focus();
         }
 
         async function resetChat() {
