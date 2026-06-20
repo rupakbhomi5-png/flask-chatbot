@@ -24,11 +24,13 @@ limiter = Limiter(
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
-
-def build_system_prompt():
+def load_products():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(base_dir, "products.json"), "r") as f:
-        data = json.load(f)
+        return json.load(f)
+
+def build_system_prompt():
+    data = load_products()
 
     product_list = "\n".join(
         f"- {p['name']}: NPR {p['price']:,}"
@@ -57,6 +59,46 @@ Keep response under 3 sentences. Be friendly but precise.'''
 
 
 SYSTEM_PROMPT = build_system_prompt()
+
+# === TOOL DEFINITION ===
+# This tells Claude what tools exist and how to call them.
+# Claude never runs Python — it just says "call this tool with these args."
+# Your code runs the actual function.
+TOOLS = [
+    {
+        "name": "search_products",
+        "description": "Search Raj Cassette inventory by category. Use this when a customer asks about a type of product.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "Product category to search.earch. Options: remotes, speakers, chargers, batteries, accessories, appliances, televisions, storage, tv_boxes, fans, phones, audio, computers, headphones, networking, security, lighting "
+                }
+            },
+            "required": ["category"]
+        }
+    }
+]
+
+
+def search_products(category: str) -> str:
+    '''Actual Python function that searches products.json by category.'''
+    data = load_products()
+    matches = [
+        p for p in data["products"]
+        if p.get("category") == category.lower()
+    ]
+    if not matches:
+        return f"No products found in category '{category}'."
+    lines = "\n".join(f"- {p['name']}: NPR {p['price']:,}" for p in matches)
+    return f"Products in '{category}':\n{lines}"
+
+def run_tool(tool_name: str, tool_input: dict) -> str:
+    '''Routes tool calls to the right function. Add new tools here.'''
+    if tool_name == "search_products":
+        return search_products(tool_input["category"])
+    return f"Unknown tool: {tool_name}"
 
 
 @app.route("/")
@@ -93,27 +135,66 @@ def chat():
     conversation_history = conversation_history[-MAX_HISTORY_MESSAGES:]
 
     try:
-        response = client.messages.create(
-            model=MODEL_NAME,
-            max_tokens=300,
-            system=SYSTEM_PROMPT,
-            messages=conversation_history
-        )
+        while True:
+            response = client.messages.create(
+                model=MODEL_NAME,
+                max_tokens=300,
+                system=SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=conversation_history
+            )
 
-        assistant_reply = response.content[0].text
+            if response.stop_reason == "tool_use":
+                serializable_content = []
+                for block in response.content:
+                    if block.type =="tool_use":
+                        serializable_content.append({
+                            "type": "tool_use",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input
+                        })
+                    elif block.type == "text":
+                        serializable_content.append({
+                            "type": "text",
+                            "text": block.text
+                        })
+                        
+                conversation_history.append({
+                    "role": "assistant",
+                    "content": serializable_content
+                })
 
-        conversation_history.append({
-            "role": "assistant",
-            "content": assistant_reply
-        })
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        result = run_tool(block.name, block.input)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result
+                        })
+
+                conversation_history.append({
+                    "role": "user",
+                    "content": tool_results
+                })
+            
+            else:
+                assistant_reply = response.content[0].text
+                conversation_history.append({
+                    "role": "assistant",
+                    "content": assistant_reply
+                })
+                break
 
         conversation_history = conversation_history[-MAX_HISTORY_MESSAGES:]
-
         session["history"] = conversation_history
         session.modified = True
 
         return jsonify({"reply": assistant_reply})
-
+                      
+               
     except anthropic.AuthenticationError:
         if conversation_history: conversation_history.pop()
         return jsonify({"error": "Invalid API key. Check your configuration."}), 401
