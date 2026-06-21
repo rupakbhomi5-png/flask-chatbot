@@ -1,10 +1,14 @@
 import os
 import json
+import uuid
+import asyncio
 import anthropic
-from flask import Flask, request, jsonify, render_template, session
+from flask import Flask, request, jsonify, render_template, session, Response, stream_with_context
 from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 load_dotenv(override=True)
 
@@ -24,6 +28,14 @@ limiter = Limiter(
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
+ 
+# ── In-memory conversation store ──────────────────────────────────────────────
+# Cookie stores a UUID. History lives here, not in the cookie.
+# This sidesteps the "cookie can't be set mid-stream" problem.
+# Data is lost on dyno restart — acceptable for a portfolio demo.
+conversation_store: dict[str, list] = {}
+
+
 def load_products():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(base_dir, "products.json"), "r") as f:
@@ -37,7 +49,7 @@ def build_system_prompt():
         for p in data["products"]
     )
 
-    return f'''You are Ramcha, a customer service agent for {data['store_name']}, \
+    return f"""You are {data['bot_name']}, a customer service agent for {data['store_name']}, \
 an electronics retail store in {data['location']}.
 
 STORE INFORMATION:
@@ -55,16 +67,50 @@ WHAT YOU MUST NEVER DO:
 - Never promise stock availability
 - For specialized items not on this list, always direct customer to call {data['contact']}
 
-Keep response under 3 sentences. Be friendly but precise.'''
+Keep response under 3 sentences. Be friendly but precise."""
 
 
 SYSTEM_PROMPT = build_system_prompt()
 
-# === TOOL DEFINITION ===
-# This tells Claude what tools exist and how to call them.
-# Claude never runs Python — it just says "call this tool with these args."
-# Your code runs the actual function.
-TOOLS = [
+def _mcp_params() -> StdioServerParameters:
+    """Points to mcp_server.py sitting next to this file."""
+    return StdioServerParameters(
+        command="python",
+        args=[os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_server.py")]
+    )
+
+async def _fetch_mcp_tools() -> list[dict]:
+    """
+    Connect to MCP server via stdio, list its tools, convert to Anthropic tool_definition format.
+    Called once at startup."""
+    async with stdio_client(_mcp_params()) as (read, write):
+        async with ClientSession(read,write) as s:
+            await s.initialize()
+            result = await s.list_tools()
+            return [
+                {
+                    "name": t.name,
+                    "description": t.description or "",
+                    "input_schema": t.inputSchema,
+                }
+                for t in result.tools
+            ]
+async def _call_mcp_tool(name: str, args: dict) -> str:
+    """
+    Open a fresh stdio connection to the MCP server, call one tool,
+    return its text output. Once connection per call - fine for a demo """
+    
+    async with stdio_client(_mcp_params()) as (read, write):
+        async with ClientSession(read, write) as s:
+            await s.initialize()
+            result = await s.call_tool(name, args)
+            return result.content[0].text
+        
+
+
+# Fallback: if MCP server fails at startup, use a hardcoded definition
+# so the app still boots. Tool execution also falls back to local function.
+_FALLBACK_TOOLS = [
     {
         "name": "search_products",
         "description": "Search Raj Cassette inventory by category. Use this when a customer asks about a type of product.",
@@ -76,14 +122,13 @@ TOOLS = [
                     "description": "Product category to search.earch. Options: remotes, speakers, chargers, batteries, accessories, appliances, televisions, storage, tv_boxes, fans, phones, audio, computers, headphones, networking, security, lighting "
                 }
             },
-            "required": ["category"]
+            "required": ["category"],
         }
     }
 ]
 
-
-def search_products(category: str) -> str:
-    '''Actual Python function that searches products.json by category.'''
+def _fallback_search_products(category: str) -> str:
+    """Direct call - used only when MCP server is unavailable."""   
     data = load_products()
     matches = [
         p for p in data["products"]
@@ -94,27 +139,49 @@ def search_products(category: str) -> str:
     lines = "\n".join(f"- {p['name']}: NPR {p['price']:,}" for p in matches)
     return f"Products in '{category}':\n{lines}"
 
+_mcp_available = True
+try:
+    TOOLS = asyncio.run(_fetch_mcp_tools())
+    print(f"✓ MCP: loaded {[t['name'] for t in TOOLS]}")
+except Exception as _e:
+    TOOLS = _FALLBACK_TOOLS
+    _mcp_available = False
+    print(f"⚠ MCP unavailable ({_e}), using fallback definitions")
+    
 def run_tool(tool_name: str, tool_input: dict) -> str:
-    '''Routes tool calls to the right function. Add new tools here.'''
+    """
+     Route a tool call. If MCP is up, call via protocol. If not, call the local function directly.
+    """
+    if _mcp_available:
+        return asyncio.run(_call_mcp_tool(tool_name, tool_input))
+    #Fallback
     if tool_name == "search_products":
-        return search_products(tool_input["category"])
+        return _fallback_search_products(tool_input.get("category", ""))
     return f"Unknown tool: {tool_name}"
 
+   
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    data = load_products()
+    return render_template("index.html", bot_name=data["bot_name"])
 
 
 @app.route("/chat", methods=["POST"])
 @limiter.limit("10 per minute")
 def chat():
-    if "history" not in session:
-        session["history"] = []
-
-    conversation_history = session["history"]
+    # Get or create a stable session UUID.
+    # Cookie stores only the UUID; conversation lives in conversation_store.
+    # This means the session cookie is set in the response HEADERS (before streaming
+    # starts), and we can freely write to conversation_store from inside the generator.
+    sid = session.get("sid")
+    if not sid:
+        sid = str(uuid.uuid4())
+        session["sid"] = sid
+    
+    history = list(conversation_store.get(sid, []))
+   
     data = request.json
-
     if not data or not data.get("message"):
         return jsonify({"error": "Message cannot be empty."}), 400
 
@@ -127,42 +194,51 @@ def chat():
     if not user_message:
         return jsonify({"error": "Message cannot be empty."}), 400
 
-    conversation_history.append({
+    history.append({
         "role": "user",
         "content": user_message
     })
 
-    conversation_history = conversation_history[-MAX_HISTORY_MESSAGES:]
+    history = history[-MAX_HISTORY_MESSAGES:]
 
-    try:
-        while True:
-            response = client.messages.create(
-                model=MODEL_NAME,
-                max_tokens=300,
-                system=SYSTEM_PROMPT,
-                tools=TOOLS,
-                messages=conversation_history
-            )
+    def generate():
+        nonlocal history
 
-            if response.stop_reason == "tool_use":
-                serializable_content = []
+        try:
+         # ── Phase 1: Tool resolution (non-streaming) ──────────────────────
+            # Runs invisibly. Each iteration: Claude calls a tool → we execute it
+            # → append result → loop again until Claude stops using tools.
+            while True:
+                response = client.messages.create(
+                    model=MODEL_NAME,
+                    max_tokens=300,
+                    system=SYSTEM_PROMPT,
+                    tools=TOOLS,
+                    messages=history
+                )            
+
+                if response.stop_reason != "tool_use":
+                    break #Claude is ready to give the final text answer
+
+                #serializable assistant content (SDK object -> plain dicts)
+                asst_content = []
                 for block in response.content:
                     if block.type =="tool_use":
-                        serializable_content.append({
+                        asst_content.append({
                             "type": "tool_use",
                             "id": block.id,
                             "name": block.name,
                             "input": block.input
                         })
                     elif block.type == "text":
-                        serializable_content.append({
+                        asst_content.append({
                             "type": "text",
                             "text": block.text
                         })
                         
-                conversation_history.append({
+                history.append({
                     "role": "assistant",
-                    "content": serializable_content
+                    "content": asst_content
                 })
 
                 tool_results = []
@@ -175,50 +251,59 @@ def chat():
                             "content": result
                         })
 
-                conversation_history.append({
+                history.append({
                     "role": "user",
                     "content": tool_results
                 })
             
-            else:
-                assistant_reply = response.content[0].text
-                conversation_history.append({
-                    "role": "assistant",
-                    "content": assistant_reply
-                })
-                break
+            # ── Phase 2: Stream final response ───────────────────────────────
+            # history now contains all tool calls + results.
+            # Claude generates its final answer; we stream each token to the client.
+            full_reply: list[str] = []
 
-        conversation_history = conversation_history[-MAX_HISTORY_MESSAGES:]
-        session["history"] = conversation_history
-        session.modified = True
+            with client.messages.stream(
+                model=MODEL_NAME,
+                max_tokens=300,
+                system=SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=history,
+            ) as stream:
+                for text in stream.text_stream:
+                    full_reply.append(text)
+                    yield f"data: {json.dumps({'token': text})}\n\n"
+        # Persist completed history to the in-memory store
 
-        return jsonify({"reply": assistant_reply})
+            final_text = "".join(full_reply)
+            history.append({"role": "assistant", "content": final_text})
+            conversation_store[sid] = history[-MAX_HISTORY_MESSAGES:]
+        
+
+            yield f"data: {json.dumps({'done': True})}\n\n"
                       
                
-    except anthropic.AuthenticationError:
-        if conversation_history: conversation_history.pop()
-        return jsonify({"error": "Invalid API key. Check your configuration."}), 401
+        except anthropic.AuthenticationError:
+            yield f"data: {json.dumps({'error': 'Invalid API key. Check your configuration.'})}\n\n"
+    
+        except anthropic.RateLimitError:
+            yield f"data: {json.dumps({'error': 'Rate limit reached. Please wait and try again'})}\n\n"
+        except anthropic.APIConnectionError:
+            yield f"data: {json.dumps({'error': 'Could not connect to AI service. Check your internet.'})}\n\n"
 
-    except anthropic.RateLimitError:
-        if conversation_history: conversation_history.pop()
-        return jsonify({"error": "Rate limit reached. Please wait and try again."}), 429
+        except anthropic.APIStatusError as e:
+            yield f"data: {json.dumps({'error': f'API error: {e.status_code}'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': 'Something went wrong. Please try again.'})}\n\n"
 
-    except anthropic.APIConnectionError:
-        if conversation_history: conversation_history.pop()
-        return jsonify({"error": "Could not connect to AI service. Check your internet."}), 503
-
-    except anthropic.APIStatusError as e:
-        if conversation_history: conversation_history.pop()
-        return jsonify({"error": f"API error: {e.status_code}"}), 500
-
-    except Exception as e:
-        if conversation_history: conversation_history.pop()
-        return jsonify({"error": "Something went wrong. Please try again."}), 500
-
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},)
 
 @app.route('/reset', methods=['POST'])
 def reset():
-    session.clear()
+    sid = session.get("sid")
+    if sid and sid in conversation_store:
+        del conversation_store[sid]
     return jsonify({"message": "Conversation reset."})
 
 

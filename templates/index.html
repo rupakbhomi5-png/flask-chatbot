@@ -60,13 +60,13 @@
             display: block;
         }
 
-        .claude {
+        .assistant {
             background-color: #f6f8fa;
             border-left: 4px solid #24292e;
             color: #24292e;
         }
 
-        .claude-label {
+        .assistant-label {
             font-weight: bold;
             color: #24292e;
             margin-bottom: 5px;
@@ -123,6 +123,23 @@
     </div>
 
     <script>
+        // FIX: BOT_NAME comes from Flask via Jinja2 — not hardcoded
+        // Flask replaces {{ bot_name }} with the value from products.json before
+        // sending this HTML to the browser. Next client = change products.json only.
+        const BOT_NAME = "{{ bot_name }}";
+
+        // FIX: appendMessage is now a real working function, not a comment.
+        // It creates a message bubble and returns the <span> we write tokens into.
+        function appendMessage(sender, text, cssClass) {
+            const box = document.getElementById("chat-box");
+            const msg = document.createElement("div");
+            msg.className = `message ${cssClass}`;
+            msg.innerHTML = `<strong class="${cssClass}-label">${sender}:</strong> <span class="msg-text">${text}</span>`;
+            box.appendChild(msg);
+            box.scrollTop = box.scrollHeight;
+            return msg.querySelector(".msg-text"); // callers write tokens to this span
+        }
+
         function escapeHtml(str) {
             const div = document.createElement("div");
             div.textContent = str;
@@ -131,47 +148,70 @@
 
         async function sendMessage() {
             const input = document.getElementById("user-input");
-            const sendBtn = document.getElementById("send-btn");
-            const chatBox = document.getElementById("chat-box");
-            const message = input.value.trim();
+            const userMessage = input.value.trim();
+            if (!userMessage) return;
 
-            if (!message) {
-                chatBox.innerHTML += `<div class="message claude"><span class="claude-label">Error:</span> Please type a message first.</div>`;
-                chatBox.scrollTop = chatBox.scrollHeight;
-                return;
-            }
-
-            chatBox.innerHTML += `<div class="message user"><span class="user-label">You:</span> ${escapeHtml(message)}</div>`;
             input.value = "";
-            sendBtn.disabled = true;
-            sendBtn.textContent = "...";
+            input.disabled = true;
+            const sendBtn = document.getElementById("send-btn");
+            if (sendBtn) sendBtn.disabled = true;
+
+            appendMessage("You", escapeHtml(userMessage), "user");
+
+            // FIX: use BOT_NAME variable, correct arg order: (sender, initialText, cssClass)
+            const botEl = appendMessage(BOT_NAME, "", "assistant");
 
             try {
                 const response = await fetch("/chat", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ message: message })
+                    body: JSON.stringify({ message: userMessage }),
                 });
 
-                const data = await response.json();
+                if (!response.ok || !response.body) {
+                    botEl.textContent = "Error: could not reach server.";
+                    return;
+                }
 
-                if (data.error) {
-                    chatBox.innerHTML += `<div class="message claude"><span class="claude-label">Error:</span> ${escapeHtml(data.error)}</div>`;
-                } else {
-                    chatBox.innerHTML += `<div class="message claude"><span class="claude-label">Ramcha:</span> ${escapeHtml(data.reply)}</div>`;
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    // SSE chunks may be split across reads — buffer and split on newlines
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split("\n");
+                    buffer = lines.pop(); // last line may be incomplete, keep it
+
+                    for (const line of lines) {
+                        if (!line.startsWith("data: ")) continue;
+                        try {
+                            const payload = JSON.parse(line.slice(6));
+                            if (payload.token) {
+                                botEl.textContent += payload.token;
+                                const chat = document.getElementById("chat-box");
+                                if (chat) chat.scrollTop = chat.scrollHeight;
+                            } else if (payload.error) {
+                                botEl.textContent = payload.error;
+                            }
+                            // payload.done === true means stream finished — nothing to do
+                        } catch (_) {}
+                    }
                 }
             } catch (err) {
-                chatBox.innerHTML += `<div class="message claude"><span class="claude-label">Error:</span> Network error. Please try again.</div>`;
+                botEl.textContent = "Network error. Please try again.";
             } finally {
-                sendBtn.disabled = false;
-                sendBtn.textContent = "Send";
-                chatBox.scrollTop = chatBox.scrollHeight;
+                input.disabled = false;
+                if (sendBtn) sendBtn.disabled = false;
                 input.focus();
             }
         }
 
         async function resetChat() {
-            await fetch('/reset', {method: 'POST'});
+            await fetch('/reset', { method: 'POST' });
             document.getElementById("chat-box").innerHTML = "";
         }
 
