@@ -181,7 +181,7 @@ if "faq" in data_check:
             "required": ["question"]
         }
     })
-_mcp_available = True
+_mcp_available = False
 try:
     TOOLS = asyncio.run(_fetch_mcp_tools())
     print(f"✓ MCP: loaded {[t['name'] for t in TOOLS]}")
