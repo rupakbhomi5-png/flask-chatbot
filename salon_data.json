@@ -1,0 +1,25 @@
+{
+    "bot_name": "Radha",
+    "store_name": "Gopiya Salon",
+    "business_type": "hair salon",
+    "location": "Austin, Texas",
+    "hours": "mon-sat 9am-7pm",
+    "contact": "11-22334",
+    "services": [
+        {"name": "Haircut", "price": 45, "duration": "45 min", "category": "haircut"},
+        {"name": "Blowout", "price": 55, "duration": "1 hour", "category": "haircut"},
+        {"name": "Balayage", "price": 180, "duration": "3 hours", "category": "coloring"},
+        {"name": "Full Color", "price": 120, "duration": "2 hours", "category": "coloring"},
+        {"name": "Manicure", "price": 30, "duration": "30 min", "category": "nails"},
+        {"name": "Pedicure", "price": 45, "duration": "45 min", "category": "nails"},
+        {"name": "Facial", "price": 80, "duration": "1 hour", "category": "skincare"},
+        {"name": "Eyebrow Wax", "price": 20, "duration": "15 min", "category": "waxing"}
+    ],
+    "faq": [
+         {"q": "Do you take walk-ins?", "a": "Yes, subject to availability. Appointments recommended for coloring services."},
+        {"q": "Do you offer student discounts?", "a": "Yes, 10% off with valid student ID."},
+        {"q": "Do you require a deposit?", "a": "Yes, 20% deposit for first appointment and all coloring services."},
+        {"q": "What payment methods do you accept?", "a": "Cash, card, and Venmo."},
+        {"q": "Do you offer gift cards?", "a": "Yes, available in any amount at the front desk."}        
+    ]
+}

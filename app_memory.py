@@ -36,35 +36,58 @@ client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 conversation_store: dict[str, list] = {}
 
 
-def load_products():
+def load_data():
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(base_dir, "products.json"), "r") as f:
+    data_file = os.environ.get("DATA_FILE", "business_data.json")
+    with open(os.path.join(base_dir, data_file), "r") as f:
         return json.load(f)
 
 def build_system_prompt():
-    data = load_products()
+    data = load_data()
 
-    product_list = "\n".join(
-        f"- {p['name']}: NPR {p['price']:,}"
-        for p in data["products"]
-    )
+    sections = []
+
+    if "products" in data:
+        product_list = "\n".join(
+            f"- {p['name']}: NPR {p['price']:,}"
+            for p in data["products"]
+        )
+        sections.append(f"PRODUCTS WE SELL:\n{product_list}")
+
+    if "services" in data:
+        service_list = "\n".join(
+            f"- {s['name']}: ${s['price']} ({s['duration']})"
+            for s in data["services"]
+        )
+        sections.append(f"SERVICES WE OFFER:\n{service_list}")
+
+    if "faq" in data:
+        faq_list = "\n".join(
+            f"- {item['q']}"
+            for item in data["faq"]
+        )
+        sections.append(f"COMMON QUESTIONS I CAN ANSWER:\n{faq_list}")
+
+    business_info = "\n".join(sections)
+
+    return_policy = ""
+    if "return_policy" in data:
+        return_policy = f"\n- Return Policy: {data['return_policy']}"
 
     return f"""You are {data['bot_name']}, a customer service agent for {data['store_name']}, \
-an electronics retail store in {data['location']}.
+a {data['business_type']} in {data['location']}.
 
-STORE INFORMATION:
+BUSINESS INFORMATION:
 - Hours: {data['hours']}
 - Location: {data['location']}
 - Contact: {data['contact']}
-- Return Policy: {data['return_policy']}
 
-PRODUCTS WE SELL:
-{product_list}
+{business_info}
 
 WHAT YOU MUST NEVER DO:
-- Never invent products we don't sell
+- Never invent products or services not listed above
 - Never quote prices not listed above - say "please contact us at {data['contact']} for current pricing"
-- Never promise stock availability
+- Never promise stock or appointment availability
 - For specialized items not on this list, always direct customer to call {data['contact']}
 
 Keep response under 3 sentences. Be friendly but precise."""
@@ -110,35 +133,47 @@ async def _call_mcp_tool(name: str, args: dict) -> str:
 
 # Fallback: if MCP server fails at startup, use a hardcoded definition
 # so the app still boots. Tool execution also falls back to local function.
-_FALLBACK_TOOLS = [
-    {
+_FALLBACK_TOOLS = []
+data_check = load_data()
+
+if "products" in data_check:
+    _FALLBACK_TOOLS.append({
         "name": "search_products",
-        "description": "Search Raj Cassette inventory by category. Use this when a customer asks about a type of product.",
+        "description": "Search inventory by product category.",    
+         "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "Product category to search."}    
+            },
+            "required": ["category"]
+        }
+    })
+
+if "services" in data_check:
+    _FALLBACK_TOOLS.append({
+        "name": "search_services",
+        "description": "Search services by category.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "category": {
-                    "type": "string",
-                    "description": "Product category to search.earch. Options: remotes, speakers, chargers, batteries, accessories, appliances, televisions, storage, tv_boxes, fans, phones, audio, computers, headphones, networking, security, lighting "
-                }
+                "category": {"type": "string", "description": "Service category to search."}
             },
-            "required": ["category"],
+            "required": ["category"]
         }
-    }
-]
+    })
 
-def _fallback_search_products(category: str) -> str:
-    """Direct call - used only when MCP server is unavailable."""   
-    data = load_products()
-    matches = [
-        p for p in data["products"]
-        if p.get("category") == category.lower()
-    ]
-    if not matches:
-        return f"No products found in category '{category}'."
-    lines = "\n".join(f"- {p['name']}: NPR {p['price']:,}" for p in matches)
-    return f"Products in '{category}':\n{lines}"
-
+if "faq" in data_check:
+    _FALLBACK_TOOLS.append({
+        "name": "get_faq",
+        "description": "Answer common customer questions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "Customer question."}
+            },
+            "required": ["question"]
+        }
+    })
 _mcp_available = True
 try:
     TOOLS = asyncio.run(_fetch_mcp_tools())
@@ -147,24 +182,49 @@ except Exception as _e:
     TOOLS = _FALLBACK_TOOLS
     _mcp_available = False
     print(f"⚠ MCP unavailable ({_e}), using fallback definitions")
-    
+
+def _fallback_search_products(category: str) -> str:
+    """Direct call - used only when MCP server is unavailable."""   
+    data = load_data()
+    matches = [
+        p for p in data.get("products", [])
+        if p.get("category") == category.lower()
+    ]
+    if not matches:
+        return f"No products found in category '{category}'."
+    lines = "\n".join(f"- {p['name']}: NPR {p['price']:,}" for p in matches)
+    return f"Products in '{category}':\n{lines}"
+
+def _fallback_search_services(category: str) -> str:
+    data = load_data()
+    matches = [s for s in data.get("services", []) if s.get("category") == category.lower()]
+    if not matches:
+        return f"No services found in category '{category}'."
+    lines = "\n".join(f"- {s['name']}: ${s['price']} ({s['duration']})" for s in matches)
+    return f"Services in '{category}':\n{lines}"
+
+def _fallback_get_faq(question: str) -> str:
+    data = load_data()
+    for item in data.get("faq", []):
+        if any(word in question.lower() for word in item["q"].lower().split()):
+            return item["a"]
+    return f"For that question please contact us at {data['contact']}."
+
 def run_tool(tool_name: str, tool_input: dict) -> str:
-    """
-     Route a tool call. If MCP is up, call via protocol. If not, call the local function directly.
-    """
     if _mcp_available:
         return asyncio.run(_call_mcp_tool(tool_name, tool_input))
-    #Fallback
     if tool_name == "search_products":
         return _fallback_search_products(tool_input.get("category", ""))
+    if tool_name == "search_services":
+        return _fallback_search_services(tool_input.get("category", ""))
+    if tool_name == "get_faq":
+        return _fallback_get_faq(tool_input.get("question", ""))
     return f"Unknown tool: {tool_name}"
-
-   
 
 @app.route("/")
 def index():
-    data = load_products()
-    return render_template("index.html", bot_name=data["bot_name"])
+    data = load_data()
+    return render_template("index.html", bot_name=data["bot_name"], store_name=data["store_name"])
 
 
 @app.route("/chat", methods=["POST"])
