@@ -3,7 +3,7 @@ import json
 import uuid
 import asyncio
 import anthropic
-from flask import Flask, request, jsonify, render_template, session, Response, stream_with_context
+from flask import Flask, request, jsonify, render_template, session, Response, stream_with_context, redirect
 from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -14,6 +14,13 @@ load_dotenv(override=True)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY")
+
+@app.before_request
+def redirect_to_https():
+    if request.headers.get('X-Forwarded-Proto') == 'http':
+        url = request.url.replace('http://', 'https://', 1)
+        return redirect(url, code=301)
+
 
 MAX_HISTORY_MESSAGES = 10  # last 5 user+assistant exchanges — bounds cookie size and token usage
 MODEL_NAME = "claude-haiku-4-5-20251001"
