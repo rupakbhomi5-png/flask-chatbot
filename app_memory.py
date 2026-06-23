@@ -184,6 +184,7 @@ if "faq" in data_check:
 _mcp_available = False
 try:
     TOOLS = asyncio.run(_fetch_mcp_tools())
+    _mcp_available = True
     print(f"✓ MCP: loaded {[t['name'] for t in TOOLS]}")
 except Exception as _e:
     TOOLS = _FALLBACK_TOOLS
