@@ -2,6 +2,9 @@ import os
 import json
 import uuid
 import asyncio
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import anthropic
 from flask import Flask, request, jsonify, render_template, session, Response, stream_with_context, redirect
 from dotenv import load_dotenv
@@ -97,10 +100,83 @@ WHAT YOU MUST NEVER DO:
 - Never promise stock or appointment availability
 - For specialized items not on this list, always direct customer to call {data['contact']}
 
+LEAD CAPTURE — THIS IS IMPORTANT:
+When a visitor asks about pricing, availability, booking, scheduling, or shows any interest in a service or product, ask for their name and best contact number or email. Once you have BOTH their name and their contact, call the capture_lead tool immediately. Do not ask for anything else — name and contact is enough. After calling capture_lead, confirm to the visitor that someone will reach out shortly.
+
 Keep response under 3 sentences. Be friendly but precise.{language_instruction}"""
 
 
 SYSTEM_PROMPT = build_system_prompt()
+
+# ── Lead capture tool definition (always available, handled locally) ──────────
+LEAD_CAPTURE_TOOL = {
+    "name": "capture_lead",
+    "description": "Call this as soon as you have collected a visitor's name and contact information (phone or email). This immediately notifies the business owner so they can follow up while the lead is warm.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "The visitor's name."
+            },
+            "contact": {
+                "type": "string",
+                "description": "The visitor's phone number or email address."
+            },
+            "service_interest": {
+                "type": "string",
+                "description": "What the visitor is interested in, in their own words."
+            }
+        },
+        "required": ["name", "contact"]
+    }
+}
+
+
+def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
+    """Send an instant email notification to the business owner when a lead is captured."""
+    smtp_host = os.environ.get("SMTP_HOST")
+    smtp_port = int(os.environ.get("SMTP_PORT", 587))
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_pass = os.environ.get("SMTP_PASS")
+    owner_email = os.environ.get("OWNER_EMAIL")
+
+    if not all([smtp_host, smtp_user, smtp_pass, owner_email]):
+        # SMTP not configured — log it, still return success to the bot
+        print(f"⚠ LEAD (email not configured): {name} | {contact} | {service_interest}")
+        return f"Lead captured: {name} ({contact})"
+
+    data = load_data()
+    store_name = data.get("store_name", "Your Business")
+
+    subject = f"New lead: {name} — {store_name}"
+    body = (
+        f"New lead from your website chatbot.\n\n"
+        f"Name:      {name}\n"
+        f"Contact:   {contact}\n"
+        f"Interested in: {service_interest or 'not specified'}\n\n"
+        f"Reply within the hour — they are still on your site."
+    )
+
+    msg = MIMEMultipart()
+    msg["From"] = smtp_user
+    msg["To"] = owner_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain"))
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(smtp_user, owner_email, msg.as_string())
+        print(f"✓ Lead email sent: {name} | {contact}")
+        return f"Lead captured and owner notified: {name} ({contact})"
+    except Exception as e:
+        print(f"⚠ Lead email failed ({e}): {name} | {contact}")
+        # Don't surface SMTP errors to the visitor — still confirm gracefully
+        return f"Lead captured: {name} ({contact})"
+
 
 def _mcp_params() -> StdioServerParameters:
     """Points to mcp_server.py sitting next to this file."""
@@ -181,6 +257,7 @@ if "faq" in data_check:
             "required": ["question"]
         }
     })
+
 _mcp_available = False
 try:
     TOOLS = asyncio.run(_fetch_mcp_tools())
@@ -190,6 +267,11 @@ except Exception as _e:
     TOOLS = _FALLBACK_TOOLS
     _mcp_available = False
     print(f"⚠ MCP unavailable ({_e}), using fallback definitions")
+
+# Always append capture_lead — it is handled locally, not via MCP
+TOOLS.append(LEAD_CAPTURE_TOOL)
+print(f"✓ capture_lead tool registered")
+
 
 def _fallback_search_products(category: str) -> str:
     """Direct call - used only when MCP server is unavailable."""   
@@ -219,6 +301,13 @@ def _fallback_get_faq(question: str) -> str:
     return f"For that question please contact us at {data['contact']}."
 
 def run_tool(tool_name: str, tool_input: dict) -> str:
+    # capture_lead is always handled locally — never routed through MCP
+    if tool_name == "capture_lead":
+        return send_lead_email(
+            name=tool_input.get("name", ""),
+            contact=tool_input.get("contact", ""),
+            service_interest=tool_input.get("service_interest", "")
+        )
     if _mcp_available:
         return asyncio.run(_call_mcp_tool(tool_name, tool_input))
     if tool_name == "search_products":
