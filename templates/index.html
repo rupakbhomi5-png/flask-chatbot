@@ -322,7 +322,7 @@
             micBtn.style.display = "none";
         } else {
             const recognition = new SpeechRecognition();
-            recognition.continuous = false;
+            recognition.continuous = true;
             recognition.interimResults = false;
             recognition.lang = "ne-NP"; // Nepali; falls back to en-US on error
 

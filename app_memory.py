@@ -231,7 +231,8 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
 @app.route("/")
 def index():
     data = load_data()
-    return render_template("index.html", bot_name=data["bot_name"], store_name=data["store_name"])
+    template = os.environ.get("TEMPLATE_FILE", "index.html")
+    return render_template(template, bot_name=data["bot_name"], store_name=data["store_name"])
 
 
 @app.route("/chat", methods=["POST"])
