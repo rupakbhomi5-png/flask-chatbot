@@ -1,144 +1,242 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="https://fav.farm/🤖">
     <title>{{ store_name }}</title>
     <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
         body {
             font-family: 'Segoe UI', Arial, sans-serif;
             background-color: #f0f4f8;
-            margin: 0;
-            padding: 40px 20px;
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
         }
 
         .chat-container {
-            max-width: 800px;
+            width: 100%;
+            max-width: 700px;
             margin: 0 auto;
             background: #ffffff;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100dvh;
         }
 
-        h1 {
+        @media (min-width: 768px) {
+            body {
+                padding: 20px;
+                align-items: center;
+                justify-content: center;
+            }
+            .chat-container {
+                height: 88dvh;
+                border-radius: 14px;
+                box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+            }
+        }
+
+        /* ── Header ── */
+        .chat-header {
+            padding: 14px 18px;
+            border-bottom: 1px solid #e8eaed;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .chat-header h1 {
+            font-size: 17px;
+            font-weight: 600;
             color: #1a1a1a;
-            margin-top: 0;
-            margin-bottom: 20px;
-            text-align: center;
-            font-size: 28px;
-            border-bottom: 2px solid #f0f4f8;
-            padding-bottom: 15px;
         }
 
+        .reset-btn {
+            background: none;
+            border: 1px solid #ddd;
+            color: #666;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .reset-btn:hover {
+            background: #f1f3f5;
+        }
+
+        /* ── Message list ── */
         #chat-box {
-            background-color: #fafbfc;
-            border: 1px solid #e1e4e8;
-            border-radius: 8px;
-            height: 450px;
+            flex: 1;
             overflow-y: auto;
-            padding: 20px;
-            margin-bottom: 20px;
+            padding: 16px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            scroll-behavior: smooth;
         }
 
         .message {
-            margin-bottom: 20px;
-            padding: 15px;
-            border-radius: 8px;
-            line-height: 1.5;
-            clear: both;
+            padding: 10px 14px;
+            border-radius: 18px;
+            line-height: 1.55;
+            font-size: 15px;
+            max-width: 80%;
+            word-break: break-word;
         }
 
         .user {
-            background-color: #e6f2ff;
-            border-left: 4px solid #0066cc;
-            color: #003366;
-        }
-
-        .user-label {
-            font-weight: bold;
-            color: #0066cc;
-            margin-bottom: 5px;
-            display: block;
+            background-color: #0066cc;
+            color: #fff;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
         }
 
         .assistant {
-            background-color: #f6f8fa;
-            border-left: 4px solid #24292e;
-            color: #24292e;
+            background-color: #f1f3f5;
+            color: #1a1a1a;
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
         }
 
         .assistant-label {
-            font-weight: bold;
-            color: #24292e;
-            margin-bottom: 5px;
             display: block;
+            font-size: 11px;
+            font-weight: 600;
+            color: #888;
+            margin-bottom: 3px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
         }
 
-        #input-area {
+        /* ── Input bar ── */
+        .input-area {
+            padding: 10px 12px;
+            padding-bottom: max(10px, env(safe-area-inset-bottom));
+            border-top: 1px solid #e8eaed;
             display: flex;
-            gap: 10px;
+            align-items: center;
+            gap: 8px;
+            background: #fff;
+            flex-shrink: 0;
         }
 
         #user-input {
             flex: 1;
-            padding: 12px 15px;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            font-size: 16px;
+            padding: 10px 16px;
+            border: 1px solid #ddd;
+            border-radius: 24px;
+            font-size: 15px;
+            background: #f6f8fa;
+            outline: none;
+            transition: border-color 0.15s, background 0.15s;
         }
 
         #user-input:focus {
-            outline: none;
             border-color: #0066cc;
-            box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.2);
+            background: #fff;
         }
 
-        button {
-            padding: 12px 24px;
-            background-color: #0066cc;
-            color: white;
+        .icon-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
             border: none;
-            border-radius: 6px;
-            font-size: 16px;
-            font-weight: bold;
             cursor: pointer;
-            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 17px;
+            flex-shrink: 0;
+            transition: background 0.15s, transform 0.1s;
+            padding: 0;
         }
 
-        button:hover {
-            background-color: #0052a3;
+        .icon-btn:active {
+            transform: scale(0.92);
+        }
+
+        #send-btn {
+            background: #0066cc;
+            color: #fff;
+        }
+
+        #send-btn:hover {
+            background: #0052a3;
+        }
+
+        #send-btn:disabled {
+            background: #99bfe8;
+            cursor: not-allowed;
+        }
+
+        #mic-btn {
+            background: #f1f3f5;
+            color: #444;
+        }
+
+        #mic-btn:hover {
+            background: #e1e4e8;
+        }
+
+        #mic-btn.listening {
+            background: #e53935;
+            color: #fff;
+            animation: pulse 1.1s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.12); }
         }
     </style>
 </head>
 <body>
     <div class="chat-container">
-        <h1>{{ store_name }}</h1>
+
+        <div class="chat-header">
+            <h1>{{ store_name }}</h1>
+            <button class="reset-btn" onclick="resetChat()">New chat</button>
+        </div>
 
         <div id="chat-box"></div>
 
-        <div id="input-area">
-            <input type="text" id="user-input" placeholder="Type your message here..."/>
-            <button id="send-btn" onclick="sendMessage()">Send</button>
-            <button onclick="resetChat()" style="background-color: #cc3300;">Reset</button>
+        <div class="input-area">
+            <input type="text" id="user-input" placeholder="Type a message..." autocomplete="off"/>
+            <button class="icon-btn" id="mic-btn" onclick="toggleMic()" title="Voice input">🎤</button>
+            <button class="icon-btn" id="send-btn" onclick="sendMessage()" title="Send">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+            </button>
         </div>
+
     </div>
 
     <script>
-        // FIX: BOT_NAME comes from Flask via Jinja2 — not hardcoded
-        // Flask replaces {{ bot_name }} with the value from products.json before
-        // sending this HTML to the browser. Next client = change products.json only.
         const BOT_NAME = "{{ bot_name }}";
 
-        // FIX: appendMessage is now a real working function, not a comment.
-        // It creates a message bubble and returns the <span> we write tokens into.
         function appendMessage(sender, text, cssClass) {
             const box = document.getElementById("chat-box");
             const msg = document.createElement("div");
             msg.className = `message ${cssClass}`;
-            msg.innerHTML = `<strong class="${cssClass}-label">${sender}:</strong> <span class="msg-text">${text}</span>`;
+            if (cssClass === "assistant") {
+                msg.innerHTML = `<span class="assistant-label">${sender}</span><span class="msg-text">${text}</span>`;
+            } else {
+                msg.innerHTML = `<span class="msg-text">${text}</span>`;
+            }
             box.appendChild(msg);
             box.scrollTop = box.scrollHeight;
-            return msg.querySelector(".msg-text"); // callers write tokens to this span
+            return msg.querySelector(".msg-text");
         }
 
         function escapeHtml(str) {
@@ -158,8 +256,6 @@
             if (sendBtn) sendBtn.disabled = true;
 
             appendMessage("You", escapeHtml(userMessage), "user");
-
-            // FIX: use BOT_NAME variable, correct arg order: (sender, initialText, cssClass)
             const botEl = appendMessage(BOT_NAME, "", "assistant");
 
             try {
@@ -182,10 +278,9 @@
                     const { done, value } = await reader.read();
                     if (done) break;
 
-                    // SSE chunks may be split across reads — buffer and split on newlines
                     buffer += decoder.decode(value, { stream: true });
                     const lines = buffer.split("\n");
-                    buffer = lines.pop(); // last line may be incomplete, keep it
+                    buffer = lines.pop();
 
                     for (const line of lines) {
                         if (!line.startsWith("data: ")) continue;
@@ -198,7 +293,6 @@
                             } else if (payload.error) {
                                 botEl.textContent = payload.error;
                             }
-                            // payload.done === true means stream finished — nothing to do
                         } catch (_) {}
                     }
                 }
@@ -212,13 +306,57 @@
         }
 
         async function resetChat() {
-            await fetch('/reset', { method: 'POST' });
+            await fetch("/reset", { method: "POST" });
             document.getElementById("chat-box").innerHTML = "";
         }
 
         document.getElementById("user-input").addEventListener("keypress", function(e) {
             if (e.key === "Enter") sendMessage();
         });
+
+        // ── Mic / Speech Recognition ──────────────────────────────────
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const micBtn = document.getElementById("mic-btn");
+
+        if (!SpeechRecognition) {
+            micBtn.style.display = "none";
+        } else {
+            const recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = "ne-NP"; // Nepali; falls back to en-US on error
+
+            let listening = false;
+
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                document.getElementById("user-input").value = transcript;
+                sendMessage();
+            };
+
+            recognition.onend = function() {
+                listening = false;
+                micBtn.classList.remove("listening");
+            };
+
+            recognition.onerror = function(e) {
+                listening = false;
+                micBtn.classList.remove("listening");
+                if (e.error === "language-not-supported") {
+                    recognition.lang = "en-US";
+                }
+            };
+
+            window.toggleMic = function() {
+                if (listening) {
+                    recognition.stop();
+                } else {
+                    recognition.start();
+                    listening = true;
+                    micBtn.classList.add("listening");
+                }
+            };
+        }
     </script>
 </body>
 </html>

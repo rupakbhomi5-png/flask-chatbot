@@ -80,7 +80,7 @@ def build_system_prompt():
     return_policy = ""
     if "return_policy" in data:
         return_policy = f"\n- Return Policy: {data['return_policy']}"
-
+    language_instruction = f"\nLANGUAGE: {data['language']}" if "language" in data else ""
     return f"""You are {data['bot_name']}, a customer service agent for {data['store_name']}, \
 a {data['business_type']} in {data['location']}.
 
@@ -97,7 +97,7 @@ WHAT YOU MUST NEVER DO:
 - Never promise stock or appointment availability
 - For specialized items not on this list, always direct customer to call {data['contact']}
 
-Keep response under 3 sentences. Be friendly but precise."""
+Keep response under 3 sentences. Be friendly but precise.{language_instruction}"""
 
 
 SYSTEM_PROMPT = build_system_prompt()

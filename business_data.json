@@ -2,6 +2,7 @@
   "store_name": "Raj Cassette",
   "bot_name" : "Raj",
   "business_type" : "electronics retail store",
+  "language": "Respond in Nepali (Devanagari script) when the customer writes or speaks in Nepali. Otherwise match their language.",
   "location" : "Bhaktapur",
   "contact": "01-6613547, 9849170890",
   "hours": "8am - 7pm daily",
