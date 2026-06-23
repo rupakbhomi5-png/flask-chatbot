@@ -400,6 +400,7 @@ def chat():
                 })
 
                 tool_results = []
+                lead_captured = False
                 for block in response.content:
                     if block.type == "tool_use":
                         result = run_tool(block.name, block.input)
@@ -408,11 +409,18 @@ def chat():
                             "tool_use_id": block.id,
                             "content": result
                         })
+                        if block.name == "capture_lead":
+                            lead_captured = True
 
                 history.append({
                     "role": "user",
                     "content": tool_results
                 })
+
+                # Break after lead capture — prevents additional MCP subprocess
+                # spawns that would push Render free tier over memory limit
+                if lead_captured:
+                    break
             
             # ── Phase 2: Stream final response ───────────────────────────────
             # history now contains all tool calls + results.
