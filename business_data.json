@@ -63,5 +63,12 @@
     {"name": "Samsung Mobile Charger", "price": 500, "category": "chargers"},
     {"name": "Silvertek Infrared Cooker", "price": 3500, "category": "appliances"},
     {"name": "T9 Hair Trimmer", "price": 850, "category": "appliances"}
-  ]
+  ],
+     "faq": [
+    {"q": "Do you repair electronics?","a": "Yes, we do repairs. Pricing depends on the problem — bring the item in for a free assessment or call us at 01-6613547 / 9849170890."},
+    {"q": "How much does repair cost?","a": "Repair costs vary by issue and cannot be quoted without inspection. Bring it in or call 01-6613547 / 9849170890 for details."},
+    {"q": "Do you repair TVs?","a": "Yes. TV repair pricing depends on the fault — visit us or call 01-6613547 / 9849170890 to discuss."},
+    { "q": "Do you repair speakers?","a": "Yes. Speaker repair pricing depends on the damage — visit us or call 01-6613547 / 9849170890."}
+  ] 
+    
 }
