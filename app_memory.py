@@ -51,7 +51,7 @@ _loop_thread = threading.Thread(target=_loop.run_forever, daemon=True)
 _loop_thread.start()
 def load_data():
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    data_file = os.environ.get("DATA_FILE", "salon_data.json")
+    data_file = os.environ.get("DATA_FILE", "business_data.json")
     with open(os.path.join(base_dir, data_file), "r") as f:
         return json.load(f)
 
@@ -324,7 +324,7 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
 @app.route("/")
 def index():
     data = load_data()
-    template = os.environ.get("TEMPLATE_FILE", "salon_index.html")
+    template = os.environ.get("TEMPLATE_FILE", "index.html")
     return render_template(template, bot_name=data["bot_name"], store_name=data["store_name"])
 
 
