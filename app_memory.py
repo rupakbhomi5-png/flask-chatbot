@@ -1,11 +1,8 @@
 import os
-import threading
 import json
 import uuid
 import asyncio
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import urllib.request
 import anthropic
 from flask import Flask, request, jsonify, render_template, session, Response, stream_with_context, redirect
 from dotenv import load_dotenv
@@ -46,9 +43,7 @@ client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 # Data is lost on dyno restart — acceptable for a portfolio demo.
 conversation_store: dict[str, list] = {}
 
-_loop = asyncio.new_event_loop()
-_loop_thread = threading.Thread(target=_loop.run_forever, daemon=True)
-_loop_thread.start()
+
 def load_data():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     data_file = os.environ.get("DATA_FILE", "business_data.json")
@@ -137,22 +132,20 @@ LEAD_CAPTURE_TOOL = {
 
 
 def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
-    """Send an instant email notification to the business owner when a lead is captured."""
-    smtp_host = os.environ.get("SMTP_HOST")
-    smtp_port = int(os.environ.get("SMTP_PORT", 587))
-    smtp_user = os.environ.get("SMTP_USER")
-    smtp_pass = os.environ.get("SMTP_PASS")
+    """Send an instant email notification to the business owner when a lead is captured.
+    Uses SendGrid HTTPS API — works on Render free tier (no SMTP port blocking)."""
+    api_key = os.environ.get("SENDGRID_API_KEY")
     owner_email = os.environ.get("OWNER_EMAIL")
+    from_email = os.environ.get("FROM_EMAIL", "rupakbhomi5@gmail.com")
 
-    if not all([smtp_host, smtp_user, smtp_pass, owner_email]):
-        # SMTP not configured — log it, still return success to the bot
-        print(f"⚠ LEAD (email not configured): {name} | {contact} | {service_interest}")
+    if not all([api_key, owner_email]):
+        print(f"⚠ LEAD (SendGrid not configured): {name} | {contact} | {service_interest}")
         return f"Lead captured: {name} ({contact})"
 
     data = load_data()
     store_name = data.get("store_name", "Your Business")
 
-    subject = f"New lead: {name} — {store_name}"
+    subject = f"New lead: {name} from {store_name}"
     body = (
         f"New lead from your website chatbot.\n\n"
         f"Name:      {name}\n"
@@ -161,23 +154,29 @@ def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
         f"Reply within the hour — they are still on your site."
     )
 
-    msg = MIMEMultipart()
-    msg["From"] = smtp_user
-    msg["To"] = owner_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
+    payload = json.dumps({
+        "personalizations": [{"to": [{"email": owner_email}]}],
+        "from": {"email": from_email},
+        "subject": subject,
+        "content": [{"type": "text/plain", "value": body}]
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        "https://api.sendgrid.com/v3/mail/send",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        },
+        method="POST"
+    )
 
     try:
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(smtp_user, owner_email, msg.as_string())
-        print(f"✓ Lead email sent: {name} | {contact}")
+        with urllib.request.urlopen(req) as resp:
+            print(f"✓ Lead email sent via SendGrid: {name} | {contact} (status {resp.status})")
         return f"Lead captured and owner notified: {name} ({contact})"
     except Exception as e:
         print(f"⚠ Lead email failed ({e}): {name} | {contact}")
-        # Don't surface SMTP errors to the visitor — still confirm gracefully
         return f"Lead captured: {name} ({contact})"
 
 
@@ -262,6 +261,12 @@ if "faq" in data_check:
     })
 
 _mcp_available = False
+# ── MCP_ENABLED flag ──────────────────────────────────────────────────────────
+# FREE TIER (Render): set MCP_ENABLED=false — prevents subprocess OOM crashes.
+# PAID CLIENT (Render Starter $7/mo+): set MCP_ENABLED=true — full MCP runs.
+# Default is true so local dev always uses MCP.
+# REMINDER: when you onboard a paying client on a paid Render plan, set MCP_ENABLED=true
+# in their service env vars. Do not forget — fallback tools work but MCP is the real product.
 _MCP_ENABLED = os.environ.get("MCP_ENABLED", "true").lower() == "true"
 
 if _MCP_ENABLED:
@@ -276,8 +281,8 @@ if _MCP_ENABLED:
 else:
     TOOLS = _FALLBACK_TOOLS
     _mcp_available = False
-    print("⚠ MCP_ENABLED=false — using fallback tools")
-    
+    print("⚠ MCP_ENABLED=false — using fallback tools (set true on paid Render plan for full MCP)")
+
 # Always append capture_lead — it is handled locally, not via MCP
 TOOLS.append(LEAD_CAPTURE_TOOL)
 print(f"✓ capture_lead tool registered")
@@ -319,7 +324,7 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
             service_interest=tool_input.get("service_interest", "")
         )
     if _mcp_available:
-        return asyncio.run_coroutine_threadsafe(_call_mcp_tool(tool_name, tool_input), _loop).result()
+        return asyncio.run(_call_mcp_tool(tool_name, tool_input))
     if tool_name == "search_products":
         return _fallback_search_products(tool_input.get("category", ""))
     if tool_name == "search_services":
@@ -473,7 +478,7 @@ def chat():
     return Response(
         stream_with_context(generate()),
         mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},)
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},)
 
 @app.route('/reset', methods=['POST'])
 def reset():
