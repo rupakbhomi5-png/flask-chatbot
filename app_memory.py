@@ -262,15 +262,22 @@ if "faq" in data_check:
     })
 
 _mcp_available = False
-try:
-    TOOLS = asyncio.run(_fetch_mcp_tools())
-    _mcp_available = True
-    print(f"✓ MCP: loaded {[t['name'] for t in TOOLS]}")
-except Exception as _e:
+_MCP_ENABLED = os.environ.get("MCP_ENABLED", "true").lower() == "true"
+
+if _MCP_ENABLED:
+    try:
+        TOOLS = asyncio.run(_fetch_mcp_tools())
+        _mcp_available = True
+        print(f"✓ MCP: loaded {[t['name'] for t in TOOLS]}")
+    except Exception as _e:
+        TOOLS = _FALLBACK_TOOLS
+        _mcp_available = False
+        print(f"⚠ MCP unavailable ({_e}), using fallback definitions")
+else:
     TOOLS = _FALLBACK_TOOLS
     _mcp_available = False
-    print(f"⚠ MCP unavailable ({_e}), using fallback definitions")
-
+    print("⚠ MCP_ENABLED=false — using fallback tools")
+    
 # Always append capture_lead — it is handled locally, not via MCP
 TOOLS.append(LEAD_CAPTURE_TOOL)
 print(f"✓ capture_lead tool registered")
