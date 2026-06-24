@@ -1,4 +1,5 @@
 import os
+import threading
 import json
 import uuid
 import asyncio
@@ -45,10 +46,12 @@ client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 # Data is lost on dyno restart — acceptable for a portfolio demo.
 conversation_store: dict[str, list] = {}
 
-
+_loop = asyncio.new_event_loop()
+_loop_thread = threading.Thread(target=_loop.run_forever, daemon=True)
+_loop_thread.start()
 def load_data():
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    data_file = os.environ.get("DATA_FILE", "business_data.json")
+    data_file = os.environ.get("DATA_FILE", "salon_data.json")
     with open(os.path.join(base_dir, data_file), "r") as f:
         return json.load(f)
 
@@ -309,7 +312,7 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
             service_interest=tool_input.get("service_interest", "")
         )
     if _mcp_available:
-        return asyncio.run(_call_mcp_tool(tool_name, tool_input))
+        return asyncio.run_coroutine_threadsafe(_call_mcp_tool(tool_name, tool_input), _loop).result()
     if tool_name == "search_products":
         return _fallback_search_products(tool_input.get("category", ""))
     if tool_name == "search_services":
@@ -321,7 +324,7 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
 @app.route("/")
 def index():
     data = load_data()
-    template = os.environ.get("TEMPLATE_FILE", "index.html")
+    template = os.environ.get("TEMPLATE_FILE", "salon_index.html")
     return render_template(template, bot_name=data["bot_name"], store_name=data["store_name"])
 
 
