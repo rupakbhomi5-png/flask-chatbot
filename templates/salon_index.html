@@ -46,7 +46,6 @@
             }
         }
 
-        /* ── Header ── */
         .chat-header {
             background: linear-gradient(135deg, #D4877C 0%, #C4756A 60%, #B06258 100%);
             padding: 16px 20px;
@@ -116,7 +115,6 @@
 
         .reset-btn:hover { background: rgba(255,255,255,0.3); }
 
-        /* ── Welcome banner ── */
         .welcome {
             background: var(--brand-light);
             border-bottom: 1px solid var(--border);
@@ -127,7 +125,6 @@
             flex-shrink: 0;
         }
 
-        /* ── Messages ── */
         #chat-box {
             flex: 1;
             overflow-y: auto;
@@ -175,7 +172,6 @@
             letter-spacing: 0.5px;
         }
 
-        /* ── Input bar ── */
         .input-area {
             padding: 12px 14px;
             padding-bottom: max(12px, env(safe-area-inset-bottom));
@@ -283,6 +279,10 @@
 <script>
     const BOT_NAME = "{{ bot_name }}";
 
+    // Conversation history lives here — sent to server with every message,
+    // returned updated in the done event. Server holds zero state.
+    let conversationHistory = [];
+
     function appendMessage(sender, text, cssClass) {
         const box = document.getElementById("chat-box");
         const msg = document.createElement("div");
@@ -320,7 +320,8 @@
             const response = await fetch("/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: userMessage }),
+                // Send history with every message so server stays stateless
+                body: JSON.stringify({ message: userMessage, history: conversationHistory }),
             });
 
             if (!response.ok || !response.body) {
@@ -345,6 +346,9 @@
                         if (payload.token) {
                             botEl.textContent += payload.token;
                             document.getElementById("chat-box").scrollTop = document.getElementById("chat-box").scrollHeight;
+                        } else if (payload.done && payload.history) {
+                            // Store updated history so next message includes full context
+                            conversationHistory = payload.history;
                         } else if (payload.error) {
                             botEl.textContent = payload.error;
                         }
@@ -361,6 +365,8 @@
     }
 
     async function resetChat() {
+        // Clear local history — server has nothing to clear
+        conversationHistory = [];
         await fetch("/reset", { method: "POST" });
         document.getElementById("chat-box").innerHTML = "";
     }
