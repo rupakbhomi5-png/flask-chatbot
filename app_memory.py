@@ -82,6 +82,7 @@ def build_system_prompt():
     if "return_policy" in data:
         return_policy = f"\n- Return Policy: {data['return_policy']}"
     language_instruction = f"\nLANGUAGE: {data['language']}" if "language" in data else ""
+    lead_rules = f" \n\nLEAD CAPTURE RULES:\n{data['lead_qualification']}" if "lead_qualification" in data else ""
     return f"""You are {data['bot_name']}, a customer service agent for {data['store_name']}, \
 a {data['business_type']} in {data['location']}.
 
@@ -101,7 +102,7 @@ WHAT YOU MUST NEVER DO:
 LEAD CAPTURE — THIS IS IMPORTANT:
 When a visitor asks about pricing, availability, booking, scheduling, or shows any interest in a service or product, ask for their name and best contact number or email. Once you have BOTH their name and their contact, call the capture_lead tool immediately. Do not ask for anything else — name and contact is enough. After calling capture_lead, confirm to the visitor that someone will reach out shortly.
 
-Keep response under 3 sentences. Be friendly but precise.{language_instruction}"""
+Keep response under 3 sentences. Be friendly but precise.{language_instruction}[lead_rules]"""
 
 DATA = load_data()
 SYSTEM_PROMPT = build_system_prompt()
