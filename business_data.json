@@ -6,6 +6,7 @@
   "location" : "Bhaktapur",
   "contact": "01-6613547, 9849170890",
   "hours": "8am - 7pm daily",
+  "currency": "NPR",
   "return_policy": "7 days return policy on all products",
   "products": [
     {"name": "10000mAh Green Power Bank", "price": 1800, "category": "chargers"},

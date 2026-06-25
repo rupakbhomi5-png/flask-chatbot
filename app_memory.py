@@ -23,7 +23,7 @@ def redirect_to_https():
         return redirect(url, code=301)
 
 
-MAX_HISTORY_MESSAGES = 10  # last 5 user+assistant exchanges — bounds cookie size and token usage
+MAX_HISTORY_MESSAGES = 6  # last 5 user+assistant exchanges — bounds cookie size and token usage
 MODEL_NAME = "claude-haiku-4-5-20251001"
 
 # Rate Limiter setup
@@ -52,19 +52,19 @@ def load_data():
 
 def build_system_prompt():
     data = load_data()
-
+    currency = data.get("currency", "$")
     sections = []
 
     if "products" in data:
         product_list = "\n".join(
-            f"- {p['name']}: NPR {p['price']:,}"
+            f"- {p['name']}: {currency} {p['price']:,}"
             for p in data["products"]
         )
         sections.append(f"PRODUCTS WE SELL:\n{product_list}")
 
     if "services" in data:
         service_list = "\n".join(
-            f"- {s['name']}: ${s['price']} ({s['duration']})"
+            f"- {s['name']}: {currency} {s['price']} ({s['duration']})"
             for s in data["services"]
         )
         sections.append(f"SERVICES WE OFFER:\n{service_list}")
@@ -88,7 +88,7 @@ a {data['business_type']} in {data['location']}.
 BUSINESS INFORMATION:
 - Hours: {data['hours']}
 - Location: {data['location']}
-- Contact: {data['contact']}
+- Contact: {data['contact']}{return_policy}
 
 {business_info}
 
@@ -103,7 +103,7 @@ When a visitor asks about pricing, availability, booking, scheduling, or shows a
 
 Keep response under 3 sentences. Be friendly but precise.{language_instruction}"""
 
-
+DATA = load_data()
 SYSTEM_PROMPT = build_system_prompt()
 
 # ── Lead capture tool definition (always available, handled locally) ──────────
@@ -142,7 +142,7 @@ def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
         print(f"⚠ LEAD (SendGrid not configured): {name} | {contact} | {service_interest}")
         return f"Lead captured: {name} ({contact})"
 
-    data = load_data()
+    data = DATA
     store_name = data.get("store_name", "Your Business")
 
     subject = f"New lead: {name} from {store_name}"
@@ -219,7 +219,7 @@ async def _call_mcp_tool(name: str, args: dict) -> str:
 # Fallback: if MCP server fails at startup, use a hardcoded definition
 # so the app still boots. Tool execution also falls back to local function.
 _FALLBACK_TOOLS = []
-data_check = load_data()
+data_check = DATA
 
 if "products" in data_check:
     _FALLBACK_TOOLS.append({
@@ -290,26 +290,28 @@ print(f"✓ capture_lead tool registered")
 
 def _fallback_search_products(category: str) -> str:
     """Direct call - used only when MCP server is unavailable."""   
-    data = load_data()
+    data = DATA
     matches = [
         p for p in data.get("products", [])
         if p.get("category") == category.lower()
     ]
     if not matches:
         return f"No products found in category '{category}'."
-    lines = "\n".join(f"- {p['name']}: NPR {p['price']:,}" for p in matches)
+    currency = DATA.get("currency", "$")
+    lines = "\n".join(f"- {p['name']}: {currency} {p['price']:,}" for p in matches)
     return f"Products in '{category}':\n{lines}"
 
 def _fallback_search_services(category: str) -> str:
-    data = load_data()
+    data = DATA
     matches = [s for s in data.get("services", []) if s.get("category") == category.lower()]
     if not matches:
         return f"No services found in category '{category}'."
-    lines = "\n".join(f"- {s['name']}: ${s['price']} ({s['duration']})" for s in matches)
+    currency = DATA.get("currency", "$")
+    lines = "\n".join(f"- {s['name']}: {currency} {s['price']} ({s['duration']})" for s in matches)
     return f"Services in '{category}':\n{lines}"
 
 def _fallback_get_faq(question: str) -> str:
-    data = load_data()
+    data = DATA
     for item in data.get("faq", []):
         if any(word in question.lower() for word in item["q"].lower().split()):
             return item["a"]
@@ -335,7 +337,7 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
 
 @app.route("/")
 def index():
-    data = load_data()
+    data = DATA
     template = os.environ.get("TEMPLATE_FILE", "index.html")
     return render_template(template, bot_name=data["bot_name"], store_name=data["store_name"])
 
@@ -381,7 +383,12 @@ def chat():
          # ── Phase 1: Tool resolution (non-streaming) ──────────────────────
             # Runs invisibly. Each iteration: Claude calls a tool → we execute it
             # → append result → loop again until Claude stops using tools.
-            while True:
+            print(f"Messages in context: {len(history)}")
+            print(f"System prompt tokens (approx): {len(SYSTEM_PROMPT.split())}")
+            max_iterations = 5
+            iteration = 0
+            while iteration < max_iterations:
+                iteration += 1
                 response = client.messages.create(
                     model=MODEL_NAME,
                     max_tokens=300,
@@ -446,7 +453,6 @@ def chat():
                 model=MODEL_NAME,
                 max_tokens=300,
                 system=SYSTEM_PROMPT,
-                tools=TOOLS,
                 messages=history,
             ) as stream:
                 for text in stream.text_stream:
@@ -473,6 +479,7 @@ def chat():
         except anthropic.APIStatusError as e:
             yield f"data: {json.dumps({'error': f'API error: {e.status_code}'})}\n\n"
         except Exception as e:
+            print(f"Unhandled error: {e}")
             yield f"data: {json.dumps({'error': 'Something went wrong. Please try again.'})}\n\n"
 
     return Response(

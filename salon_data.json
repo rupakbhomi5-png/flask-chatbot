@@ -5,6 +5,7 @@
     "location": "Austin, Texas",
     "hours": "mon-sat 9am-7pm",
     "contact": "11-22334",
+    "currency": "$",
     "services": [
         {"name": "Haircut", "price": 45, "duration": "45 min", "category": "haircut"},
         {"name": "Blowout", "price": 55, "duration": "1 hour", "category": "haircut"},
