@@ -1,10 +1,9 @@
 import os
 import json
-import uuid
 import asyncio
 import urllib.request
 import anthropic
-from flask import Flask, request, jsonify, render_template, session, Response, stream_with_context, redirect
+from flask import Flask, request, jsonify, render_template, Response, stream_with_context, redirect
 from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -14,75 +13,63 @@ from mcp.client.stdio import stdio_client
 load_dotenv(override=True)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY")
 
 @app.before_request
 def redirect_to_https():
-    if request.headers.get('X-Forwarded-Proto') == 'http':
-        url = request.url.replace('http://', 'https://', 1)
+    if request.headers.get("X-Forwarded-Proto") == "http":
+        url = request.url.replace("http://", "https://", 1)
         return redirect(url, code=301)
 
-
-MAX_HISTORY_MESSAGES = 6  # last 5 user+assistant exchanges — bounds cookie size and token usage
+MAX_HISTORY_MESSAGES = 10   # last 5 user+assistant exchanges
 MODEL_NAME = "claude-haiku-4-5-20251001"
+MAX_TOOL_ITERATIONS = 5     # safety cap — prevents runaway tool loops
 
-# Rate Limiter setup
 limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=["200 per day", "50 per hour"],
-    storage_uri="memory://"
+    storage_uri="memory://",
 )
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
- 
-# ── In-memory conversation store ──────────────────────────────────────────────
-# Cookie stores a UUID. History lives here, not in the cookie.
-# This sidesteps the "cookie can't be set mid-stream" problem.
-# Data is lost on dyno restart — acceptable for a portfolio demo.
-conversation_store: dict[str, list] = {}
-
-
-def load_data():
+# ── Data & system prompt — loaded ONCE at startup ─────────────────────────────
+def load_data() -> dict:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     data_file = os.environ.get("DATA_FILE", "business_data.json")
     with open(os.path.join(base_dir, data_file), "r") as f:
         return json.load(f)
 
-def build_system_prompt():
-    data = load_data()
+def build_system_prompt(data: dict) -> str:
     currency = data.get("currency", "$")
     sections = []
-
     if "products" in data:
         product_list = "\n".join(
             f"- {p['name']}: {currency} {p['price']:,}"
             for p in data["products"]
         )
         sections.append(f"PRODUCTS WE SELL:\n{product_list}")
-
     if "services" in data:
         service_list = "\n".join(
             f"- {s['name']}: {currency} {s['price']} ({s['duration']})"
             for s in data["services"]
         )
         sections.append(f"SERVICES WE OFFER:\n{service_list}")
-
     if "faq" in data:
-        faq_list = "\n".join(
-            f"- {item['q']}"
-            for item in data["faq"]
-        )
+        faq_list = "\n".join(f"- {item['q']}" for item in data["faq"])
         sections.append(f"COMMON QUESTIONS I CAN ANSWER:\n{faq_list}")
-
     business_info = "\n".join(sections)
-
-    return_policy = ""
-    if "return_policy" in data:
-        return_policy = f"\n- Return Policy: {data['return_policy']}"
-    language_instruction = f"\nLANGUAGE: {data['language']}" if "language" in data else ""
-    lead_rules = f" \n\nLEAD CAPTURE RULES:\n{data['lead_qualification']}" if "lead_qualification" in data else ""
+    return_policy = (
+        f"\n- Return Policy: {data['return_policy']}" if "return_policy" in data else ""
+    )
+    language_instruction = (
+        f"\nLANGUAGE: {data['language']}" if "language" in data else ""
+    )
+    lead_rules = (
+        f"\n\nLEAD CAPTURE RULES:\n{data['lead_qualification']}"
+        if "lead_qualification" in data
+        else ""
+    )
     return f"""You are {data['bot_name']}, a customer service agent for {data['store_name']}, \
 a {data['business_type']} in {data['location']}.
 
@@ -100,52 +87,51 @@ WHAT YOU MUST NEVER DO:
 - For specialized items not on this list, always direct customer to call {data['contact']}
 
 LEAD CAPTURE — THIS IS IMPORTANT:
-When a visitor asks about pricing, availability, booking, scheduling, or shows any interest in a service or product, ask for their name and best contact number or email. Once you have BOTH their name and their contact, call the capture_lead tool immediately. Do not ask for anything else — name and contact is enough. After calling capture_lead, confirm to the visitor that someone will reach out shortly.
+When a visitor asks about pricing, availability, booking, scheduling, or shows any interest in a \
+service or product, ask for their name and best contact number or email. Once you have BOTH their \
+name and their contact, call the capture_lead tool immediately. Do not ask for anything else — \
+name and contact is enough. After calling capture_lead, confirm to the visitor that someone will \
+reach out shortly.
 
-Keep response under 3 sentences. Be friendly but precise.{language_instruction}[lead_rules]"""
+Keep response under 3 sentences. Be friendly but precise.{language_instruction}{lead_rules}"""
 
 DATA = load_data()
-SYSTEM_PROMPT = build_system_prompt()
+SYSTEM_PROMPT = build_system_prompt(DATA)
 
-# ── Lead capture tool definition (always available, handled locally) ──────────
+# ── Lead capture tool ──────────────────────────────────────────────────────────
 LEAD_CAPTURE_TOOL = {
     "name": "capture_lead",
-    "description": "Call this as soon as you have collected a visitor's name and contact information (phone or email). This immediately notifies the business owner so they can follow up while the lead is warm.",
+    "description": (
+        "Call this as soon as you have collected a visitor's name and contact information "
+        "(phone or email). This immediately notifies the business owner so they can follow "
+        "up while the lead is warm."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "name": {
-                "type": "string",
-                "description": "The visitor's name."
-            },
+            "name": {"type": "string", "description": "The visitor's name."},
             "contact": {
                 "type": "string",
-                "description": "The visitor's phone number or email address."
+                "description": "The visitor's phone number or email address.",
             },
             "service_interest": {
                 "type": "string",
-                "description": "What the visitor is interested in, in their own words."
-            }
+                "description": "What the visitor is interested in, in their own words.",
+            },
         },
-        "required": ["name", "contact"]
-    }
+        "required": ["name", "contact"],
+    },
 }
 
-
 def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
-    """Send an instant email notification to the business owner when a lead is captured.
-    Uses SendGrid HTTPS API — works on Render free tier (no SMTP port blocking)."""
+    """Notify the business owner via SendGrid when a lead is captured."""
     api_key = os.environ.get("SENDGRID_API_KEY")
     owner_email = os.environ.get("OWNER_EMAIL")
-    from_email = os.environ.get("FROM_EMAIL", "rupakbhomi5@gmail.com")
-
+    from_email = os.environ.get("FROM_EMAIL", "noreply@example.com")
     if not all([api_key, owner_email]):
         print(f"⚠ LEAD (SendGrid not configured): {name} | {contact} | {service_interest}")
         return f"Lead captured: {name} ({contact})"
-
-    data = DATA
-    store_name = data.get("store_name", "Your Business")
-
+    store_name = DATA.get("store_name", "Your Business")
     subject = f"New lead: {name} from {store_name}"
     body = (
         f"New lead from your website chatbot.\n\n"
@@ -154,46 +140,39 @@ def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
         f"Interested in: {service_interest or 'not specified'}\n\n"
         f"Reply within the hour — they are still on your site."
     )
-
     payload = json.dumps({
         "personalizations": [{"to": [{"email": owner_email}]}],
         "from": {"email": from_email},
         "subject": subject,
-        "content": [{"type": "text/plain", "value": body}]
+        "content": [{"type": "text/plain", "value": body}],
     }).encode("utf-8")
-
     req = urllib.request.Request(
         "https://api.sendgrid.com/v3/mail/send",
         data=payload,
         headers={
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         },
-        method="POST"
+        method="POST",
     )
-
     try:
         with urllib.request.urlopen(req) as resp:
-            print(f"✓ Lead email sent via SendGrid: {name} | {contact} (status {resp.status})")
+            print(f"✓ Lead email sent: {name} | {contact} (status {resp.status})")
         return f"Lead captured and owner notified: {name} ({contact})"
     except Exception as e:
         print(f"⚠ Lead email failed ({e}): {name} | {contact}")
         return f"Lead captured: {name} ({contact})"
 
-
+# ── MCP plumbing ───────────────────────────────────────────────────────────────
 def _mcp_params() -> StdioServerParameters:
-    """Points to mcp_server.py sitting next to this file."""
     return StdioServerParameters(
         command="python",
-        args=[os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_server.py")]
+        args=[os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_server.py")],
     )
 
 async def _fetch_mcp_tools() -> list[dict]:
-    """
-    Connect to MCP server via stdio, list its tools, convert to Anthropic tool_definition format.
-    Called once at startup."""
     async with stdio_client(_mcp_params()) as (read, write):
-        async with ClientSession(read,write) as s:
+        async with ClientSession(read, write) as s:
             await s.initialize()
             result = await s.list_tools()
             return [
@@ -204,38 +183,29 @@ async def _fetch_mcp_tools() -> list[dict]:
                 }
                 for t in result.tools
             ]
+
 async def _call_mcp_tool(name: str, args: dict) -> str:
-    """
-    Open a fresh stdio connection to the MCP server, call one tool,
-    return its text output. Once connection per call - fine for a demo """
-    
     async with stdio_client(_mcp_params()) as (read, write):
         async with ClientSession(read, write) as s:
             await s.initialize()
             result = await s.call_tool(name, args)
             return result.content[0].text
-        
 
-
-# Fallback: if MCP server fails at startup, use a hardcoded definition
-# so the app still boots. Tool execution also falls back to local function.
+# ── Fallback tool definitions (used when MCP is unavailable) ──────────────────
 _FALLBACK_TOOLS = []
-data_check = DATA
-
-if "products" in data_check:
+if "products" in DATA:
     _FALLBACK_TOOLS.append({
         "name": "search_products",
-        "description": "Search inventory by product category.",    
-         "input_schema": {
+        "description": "Search inventory by product category.",
+        "input_schema": {
             "type": "object",
             "properties": {
-                "category": {"type": "string", "description": "Product category to search."}    
+                "category": {"type": "string", "description": "Product category to search."}
             },
-            "required": ["category"]
-        }
+            "required": ["category"],
+        },
     })
-
-if "services" in data_check:
+if "services" in DATA:
     _FALLBACK_TOOLS.append({
         "name": "search_services",
         "description": "Search services by category.",
@@ -244,11 +214,10 @@ if "services" in data_check:
             "properties": {
                 "category": {"type": "string", "description": "Service category to search."}
             },
-            "required": ["category"]
-        }
+            "required": ["category"],
+        },
     })
-
-if "faq" in data_check:
+if "faq" in DATA:
     _FALLBACK_TOOLS.append({
         "name": "get_faq",
         "description": "Answer common customer questions.",
@@ -257,17 +226,12 @@ if "faq" in data_check:
             "properties": {
                 "question": {"type": "string", "description": "Customer question."}
             },
-            "required": ["question"]
-        }
+            "required": ["question"],
+        },
     })
 
+# ── MCP startup ────────────────────────────────────────────────────────────────
 _mcp_available = False
-# ── MCP_ENABLED flag ──────────────────────────────────────────────────────────
-# FREE TIER (Render): set MCP_ENABLED=false — prevents subprocess OOM crashes.
-# PAID CLIENT (Render Starter $7/mo+): set MCP_ENABLED=true — full MCP runs.
-# Default is true so local dev always uses MCP.
-# REMINDER: when you onboard a paying client on a paid Render plan, set MCP_ENABLED=true
-# in their service env vars. Do not forget — fallback tools work but MCP is the real product.
 _MCP_ENABLED = os.environ.get("MCP_ENABLED", "true").lower() == "true"
 
 if _MCP_ENABLED:
@@ -282,49 +246,40 @@ if _MCP_ENABLED:
 else:
     TOOLS = _FALLBACK_TOOLS
     _mcp_available = False
-    print("⚠ MCP_ENABLED=false — using fallback tools (set true on paid Render plan for full MCP)")
+    print("⚠ MCP_ENABLED=false — using fallback tools")
 
-# Always append capture_lead — it is handled locally, not via MCP
 TOOLS.append(LEAD_CAPTURE_TOOL)
-print(f"✓ capture_lead tool registered")
+print("✓ capture_lead tool registered")
 
-
+# ── Fallback tool execution (uses cached DATA) ─────────────────────────────────
 def _fallback_search_products(category: str) -> str:
-    """Direct call - used only when MCP server is unavailable."""   
-    data = DATA
-    matches = [
-        p for p in data.get("products", [])
-        if p.get("category") == category.lower()
-    ]
+    currency = DATA.get("currency", "$")
+    matches = [p for p in DATA.get("products", []) if p.get("category") == category.lower()]
     if not matches:
         return f"No products found in category '{category}'."
-    currency = DATA.get("currency", "$")
     lines = "\n".join(f"- {p['name']}: {currency} {p['price']:,}" for p in matches)
     return f"Products in '{category}':\n{lines}"
 
 def _fallback_search_services(category: str) -> str:
-    data = DATA
-    matches = [s for s in data.get("services", []) if s.get("category") == category.lower()]
+    currency = DATA.get("currency", "$")
+    matches = [s for s in DATA.get("services", []) if s.get("category") == category.lower()]
     if not matches:
         return f"No services found in category '{category}'."
-    currency = DATA.get("currency", "$")
     lines = "\n".join(f"- {s['name']}: {currency} {s['price']} ({s['duration']})" for s in matches)
     return f"Services in '{category}':\n{lines}"
 
 def _fallback_get_faq(question: str) -> str:
-    data = DATA
-    for item in data.get("faq", []):
+    for item in DATA.get("faq", []):
         if any(word in question.lower() for word in item["q"].lower().split()):
             return item["a"]
-    return f"For that question please contact us at {data['contact']}."
+    return f"For that question please contact us at {DATA['contact']}."
 
 def run_tool(tool_name: str, tool_input: dict) -> str:
-    # capture_lead is always handled locally — never routed through MCP
     if tool_name == "capture_lead":
         return send_lead_email(
             name=tool_input.get("name", ""),
             contact=tool_input.get("contact", ""),
-            service_interest=tool_input.get("service_interest", "")
+            service_interest=tool_input.get("service_interest", ""),
         )
     if _mcp_available:
         return asyncio.run(_call_mcp_tool(tool_name, tool_input))
@@ -336,92 +291,55 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
         return _fallback_get_faq(tool_input.get("question", ""))
     return f"Unknown tool: {tool_name}"
 
+# ── Routes ─────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    data = DATA
     template = os.environ.get("TEMPLATE_FILE", "index.html")
-    return render_template(template, bot_name=data["bot_name"], store_name=data["store_name"])
-
+    return render_template(template, bot_name=DATA["bot_name"], store_name=DATA["store_name"])
 
 @app.route("/chat", methods=["POST"])
 @limiter.limit("10 per minute")
 def chat():
-    # Get or create a stable session UUID.
-    # Cookie stores only the UUID; conversation lives in conversation_store.
-    # This means the session cookie is set in the response HEADERS (before streaming
-    # starts), and we can freely write to conversation_store from inside the generator.
-    sid = session.get("sid")
-    if not sid:
-        sid = str(uuid.uuid4())
-        session["sid"] = sid
-    
-    history = list(conversation_store.get(sid, []))
-   
-    data = request.json
-    if not data or not data.get("message"):
+    body = request.json
+    if not body or not body.get("message"):
         return jsonify({"error": "Message cannot be empty."}), 400
-
-    user_message = data["message"].strip()
-
-    # === BACKEND LENGTH VALIDATION ===
+    user_message = body["message"].strip()
     if len(user_message) > 500:
         return jsonify({"error": "Message too long. Please keep it under 500 characters."}), 400
-
     if not user_message:
         return jsonify({"error": "Message cannot be empty."}), 400
-
-    history.append({
-        "role": "user",
-        "content": user_message
-    })
-
+    # History travels from the browser — server holds no state between requests.
+    # Stateless: survives dyno restarts, scales across workers without sticky sessions.
+    history = body.get("history", [])
+    history.append({"role": "user", "content": user_message})
     history = history[-MAX_HISTORY_MESSAGES:]
 
     def generate():
         nonlocal history
-
         try:
-         # ── Phase 1: Tool resolution (non-streaming) ──────────────────────
-            # Runs invisibly. Each iteration: Claude calls a tool → we execute it
-            # → append result → loop again until Claude stops using tools.
-            print(f"Messages in context: {len(history)}")
-            print(f"System prompt tokens (approx): {len(SYSTEM_PROMPT.split())}")
-            max_iterations = 5
-            iteration = 0
-            while iteration < max_iterations:
-                iteration += 1
+            # ── Phase 1: Tool resolution (non-streaming) ──────────────────────
+            for _ in range(MAX_TOOL_ITERATIONS):
                 response = client.messages.create(
                     model=MODEL_NAME,
                     max_tokens=300,
                     system=SYSTEM_PROMPT,
                     tools=TOOLS,
-                    messages=history
-                )            
-
+                    messages=history,
+                )
                 if response.stop_reason != "tool_use":
-                    break #Claude is ready to give the final text answer
-
-                #serializable assistant content (SDK object -> plain dicts)
+                    break
                 asst_content = []
                 for block in response.content:
-                    if block.type =="tool_use":
+                    if block.type == "tool_use":
                         asst_content.append({
                             "type": "tool_use",
                             "id": block.id,
                             "name": block.name,
-                            "input": block.input
+                            "input": block.input,
                         })
                     elif block.type == "text":
-                        asst_content.append({
-                            "type": "text",
-                            "text": block.text
-                        })
-                        
-                history.append({
-                    "role": "assistant",
-                    "content": asst_content
-                })
-
+                        asst_content.append({"type": "text", "text": block.text})
+                history.append({"role": "assistant", "content": asst_content})
                 tool_results = []
                 lead_captured = False
                 for block in response.content:
@@ -430,26 +348,16 @@ def chat():
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
-                            "content": result
+                            "content": result,
                         })
                         if block.name == "capture_lead":
                             lead_captured = True
-
-                history.append({
-                    "role": "user",
-                    "content": tool_results
-                })
-
-                # Break after lead capture — prevents additional MCP subprocess
-                # spawns that would push Render free tier over memory limit
+                history.append({"role": "user", "content": tool_results})
                 if lead_captured:
                     break
-            
-            # ── Phase 2: Stream final response ───────────────────────────────
-            # history now contains all tool calls + results.
-            # Claude generates its final answer; we stream each token to the client.
-            full_reply: list[str] = []
 
+            # ── Phase 2: Stream final response ────────────────────────────────
+            full_reply: list[str] = []
             with client.messages.stream(
                 model=MODEL_NAME,
                 max_tokens=300,
@@ -459,24 +367,18 @@ def chat():
                 for text in stream.text_stream:
                     full_reply.append(text)
                     yield f"data: {json.dumps({'token': text})}\n\n"
-        # Persist completed history to the in-memory store
-
             final_text = "".join(full_reply)
             history.append({"role": "assistant", "content": final_text})
-            conversation_store[sid] = history[-MAX_HISTORY_MESSAGES:]
-        
+            # Return trimmed history so browser includes it in the next request
+            trimmed = history[-MAX_HISTORY_MESSAGES:]
+            yield f"data: {json.dumps({'done': True, 'history': trimmed})}\n\n"
 
-            yield f"data: {json.dumps({'done': True})}\n\n"
-                      
-               
         except anthropic.AuthenticationError:
             yield f"data: {json.dumps({'error': 'Invalid API key. Check your configuration.'})}\n\n"
-    
         except anthropic.RateLimitError:
-            yield f"data: {json.dumps({'error': 'Rate limit reached. Please wait and try again'})}\n\n"
+            yield f"data: {json.dumps({'error': 'Rate limit reached. Please wait and try again.'})}\n\n"
         except anthropic.APIConnectionError:
             yield f"data: {json.dumps({'error': 'Could not connect to AI service. Check your internet.'})}\n\n"
-
         except anthropic.APIStatusError as e:
             yield f"data: {json.dumps({'error': f'API error: {e.status_code}'})}\n\n"
         except Exception as e:
@@ -486,20 +388,17 @@ def chat():
     return Response(
         stream_with_context(generate()),
         mimetype="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},)
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
-@app.route('/reset', methods=['POST'])
+@app.route("/reset", methods=["POST"])
 def reset():
-    sid = session.get("sid")
-    if sid and sid in conversation_store:
-        del conversation_store[sid]
+    # History lives in the browser — nothing to clear server-side.
     return jsonify({"message": "Conversation reset."})
-
 
 @app.errorhandler(429)
 def rate_limit_handler(e):
     return jsonify({"error": "Too many requests. Please slow down."}), 429
-
 
 if __name__ == "__main__":
     app.run(debug=True)
