@@ -4,7 +4,8 @@
     "business_type": "roofing contractor",
     "location": "Houston, Texas",
     "hours": "mon-fri 7am-6pm, sat 8am-2pm",
-    "contact": "YOUR-PHONE-HERE",
+    "contact": "1234567890",
+    "lead_qualification": "Never call capture_lead until you have BOTH a name AND a contact method (phone or email). If you only have the visitor's problem description, ask for their name and contact first before calling capture_lead.",
     "currency": "$",
     "lead_qualification": "Before calling capture_lead, always ask: Is this an emergency (active leak, storm damage) or are you looking for an inspection or future quote? If emergency or ready to book, call capture_lead immediately and mark URGENT. If just a general question, answer it first, then ask if they would like someone to follow up — only call capture_lead if they say yes.",
     "services": [
