@@ -4,10 +4,8 @@
     "business_type": "roofing contractor",
     "location": "Houston, Texas",
     "hours": "mon-fri 7am-6pm, sat 8am-2pm",
-    "contact": "1234567890",
-    "lead_qualification": "Never call capture_lead until you have BOTH a name AND a contact method (phone or email). If you only have the visitor's problem description, ask for their name and contact first before calling capture_lead.",
     "currency": "$",
-    "lead_qualification": "Before calling capture_lead, always ask: Is this an emergency (active leak, storm damage) or are you looking for an inspection or future quote? If emergency or ready to book, call capture_lead immediately and mark URGENT. If just a general question, answer it first, then ask if they would like someone to follow up — only call capture_lead if they say yes.",
+    "lead_qualification": "Always collect the visitor's name and contact method (phone or email) before calling capture_lead — no exceptions. Ask what they need first, then ask for their name and contact. Once you have both, call capture_lead. If the situation is an emergency (active leak, storm damage, urgent repair), mark the lead URGENT. If it is a routine inquiry or future quote, mark it NORMAL.",
     "services": [
         {"name": "Free Roof Inspection", "price": 0, "duration": "45 min", "category": "inspection"},
         {"name": "Roof Repair (minor)", "price": 350, "duration": "2-4 hours", "category": "repair"},

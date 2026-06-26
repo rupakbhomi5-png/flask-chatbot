@@ -5,7 +5,7 @@
   "language": "Detect the customer's language and script and match it exactly. If they write in Nepali Devanagari script, respond in Nepali Devanagari. If they write in Roman Nepali (transliterated Nepali like 'tapai lai kasto cha'), respond in Roman Nepali. If they write in English, respond in English. Never respond in Hindi under any circumstance.",
   "location" : "Bhaktapur",
   "contact": "01-6613547, 9849170890",
-  "lead_qualification": "Never call capture_lead until you have BOTH a name AND a contact method (phone or email). If you only have the visitor's problem description, ask for their name and contact first before calling capture_lead.",
+  "lead_qualification": "Always collect the visitor's name and contact method (phone or email) before calling capture_lead — no exceptions. Ask what they need first, then ask for their name and contact. Once you have both, call capture_lead. If the situation is an emergency (active leak, storm damage, urgent repair), mark the lead URGENT. If it is a routine inquiry or future quote, mark it NORMAL.",
   "hours": "8am - 7pm daily",
   "currency": "NPR",
   "return_policy": "7 days return policy on all products",
