@@ -155,6 +155,10 @@ def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
         with urllib.request.urlopen(req) as resp:
             print(f"✓ Lead email sent: {name} | {contact} (status {resp.status})")
         return f"Lead captured and owner notified: {name} ({contact})"
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8')
+        print(f"⚠ Lead email failed ({e}): {name} | {contact} | {error_body}")
+        return f"Lead captured: {name} ({contact})"
     except Exception as e:
         print(f"⚠ Lead email failed ({e}): {name} | {contact}")
         return f"Lead captured: {name} ({contact})"
