@@ -120,12 +120,12 @@ LEAD_CAPTURE_TOOL = {
 }
 
 def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
-    """Notify the business owner via SendGrid when a lead is captured."""
-    api_key = os.environ.get("SENDGRID_API_KEY")
+    """Notify the business owner via Resend when a lead is captured."""
+    api_key = os.environ.get("RESEND_API_KEY")
     owner_email = os.environ.get("OWNER_EMAIL")
     from_email = os.environ.get("FROM_EMAIL", "noreply@example.com")
     if not all([api_key, owner_email]):
-        print(f"⚠ LEAD (SendGrid not configured): {name} | {contact} | {service_interest}")
+        print(f"⚠ LEAD (Resend not configured): {name} | {contact} | {service_interest}")
         return f"Lead captured: {name} ({contact})"
     store_name = DATA.get("store_name", "Your Business")
     subject = f"New inquiry from {store_name}"
@@ -137,13 +137,13 @@ def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
         f"Reply within the hour — they are still on your site."
     )
     payload = json.dumps({
-        "personalizations": [{"to": [{"email": owner_email}]}],
-        "from": {"email": from_email},
+        "from": from_email,
+        "to": [owner_email],
         "subject": subject,
-        "content": [{"type": "text/plain", "value": body}],
+        "text": body,
     }).encode("utf-8")
     req = urllib.request.Request(
-        "https://api.sendgrid.com/v3/mail/send",
+        "https://api.resend.com/emails",
         data=payload,
         headers={
             "Authorization": f"Bearer {api_key}",
