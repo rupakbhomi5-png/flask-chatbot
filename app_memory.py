@@ -87,11 +87,7 @@ WHAT YOU MUST NEVER DO:
 - For specialized items not on this list, always direct customer to call {data['contact']}
 
 LEAD CAPTURE — THIS IS IMPORTANT:
-When a visitor asks about pricing, availability, booking, scheduling, or shows any interest in a \
-service or product, ask for their name and best contact number or email. Once you have BOTH their \
-name and their contact, call the capture_lead tool immediately. Do not ask for anything else — \
-name and contact is enough. After calling capture_lead, confirm to the visitor that someone will \
-reach out shortly.
+The moment a visitor provides BOTH a name AND a contact (phone or email) in any message, call capture_lead immediately. Do not confirm, do not ask follow-up questions, do not verify. Name + contact = call the tool instantly. Then tell them someone will be in touch.
 
 Keep response under 3 sentences. Be friendly but precise.{language_instruction}{lead_rules}"""
 
