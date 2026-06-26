@@ -4,6 +4,7 @@
     "business_type": "roofing contractor",
     "location": "Houston, Texas",
     "hours": "mon-fri 7am-6pm, sat 8am-2pm",
+    "contact": "123-456-7890",
     "currency": "$",
     "lead_qualification": "Always collect the visitor's name and contact method (phone or email) before calling capture_lead — no exceptions. Ask what they need first, then ask for their name and contact. Once you have both, call capture_lead. If the situation is an emergency (active leak, storm damage, urgent repair), mark the lead URGENT. If it is a routine inquiry or future quote, mark it NORMAL.",
     "services": [

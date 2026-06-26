@@ -132,7 +132,7 @@ def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
         print(f"⚠ LEAD (SendGrid not configured): {name} | {contact} | {service_interest}")
         return f"Lead captured: {name} ({contact})"
     store_name = DATA.get("store_name", "Your Business")
-    subject = f"New lead: {name} from {store_name}"
+    subject = f"New inquiry from {store_name}"
     body = (
         f"New lead from your website chatbot.\n\n"
         f"Name:      {name}\n"
