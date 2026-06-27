@@ -1,6 +1,9 @@
 import os
 import json
 import asyncio
+import threading
+import time
+import secrets
 import urllib.request
 import anthropic
 from flask import Flask, request, jsonify, render_template, Response, stream_with_context, redirect
@@ -12,6 +15,8 @@ from mcp.client.stdio import stdio_client
 
 load_dotenv(override=True)
 
+assert os.environ.get("ANTHROPIC_API_KEY"), "Missing ANTHROPIC_API_KEY — set it before starting"
+
 app = Flask(__name__)
 
 @app.before_request
@@ -20,18 +25,54 @@ def redirect_to_https():
         url = request.url.replace("http://", "https://", 1)
         return redirect(url, code=301)
 
-MAX_HISTORY_MESSAGES = 6
+MAX_HISTORY_MESSAGES = 6    # 3 exchanges — enough for a support/sales bot
 MODEL_NAME = "claude-haiku-4-5-20251001"
 MAX_TOOL_ITERATIONS = 3
+SESSION_TTL = 3600
+
+# Redis-backed rate limiter when REDIS_URL is set; memory-only for single-worker dev
+_redis_url = os.environ.get("REDIS_URL")
+if not _redis_url:
+    print("⚠ REDIS_URL not set — rate limiter uses memory (single-worker only, resets on restart)")
 
 limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=["200 per day", "50 per hour"],
-    storage_uri="memory://",
+    storage_uri=_redis_url or "memory://",
 )
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+
+# ── Server-side session store ─────────────────────────────────────────────────
+# History lives on the server so clients cannot inject fake assistant turns.
+_sessions: dict = {}
+_sessions_lock = threading.Lock()
+
+def _purge_old_sessions():
+    cutoff = time.time() - SESSION_TTL
+    with _sessions_lock:
+        stale = [k for k, v in _sessions.items() if v["ts"] < cutoff]
+        for k in stale:
+            del _sessions[k]
+
+def get_session(session_id):
+    """Return (session_id, history_copy). Creates new session if id is unknown."""
+    _purge_old_sessions()
+    with _sessions_lock:
+        if session_id and session_id in _sessions:
+            entry = _sessions[session_id]
+            entry["ts"] = time.time()
+            return session_id, list(entry["history"])
+        new_id = secrets.token_urlsafe(32)
+        _sessions[new_id] = {"history": [], "ts": time.time()}
+        return new_id, []
+
+def save_session(session_id, history):
+    with _sessions_lock:
+        if session_id in _sessions:
+            _sessions[session_id]["history"] = history[-MAX_HISTORY_MESSAGES:]
+            _sessions[session_id]["ts"] = time.time()
 
 # ── Data & system prompt — loaded ONCE at startup ─────────────────────────────
 def load_data() -> dict:
@@ -56,9 +97,17 @@ def build_system_prompt(data: dict) -> str:
         )
         sections.append(f"SERVICES:\n{service_list}")
     if "faq" in data:
-        # Full Q&A pairs — bot answers FAQ directly without a tool call
+        # Full Q&A pairs — bot answers FAQ directly without a tool call.
+        # No get_faq tool needed in fallback mode.
         faq_list = "\n".join(f"Q: {item['q']}\nA: {item['a']}" for item in data["faq"])
         sections.append(f"FAQ:\n{faq_list}")
+    if "custom_sections" in data:
+        # Generic sections for any business type — dental insurance lists,
+        # restaurant menus, law firm practice areas, etc.
+        # JSON shape: [{"title": "SECTION TITLE", "items": ["item 1", "item 2"]}]
+        for section in data["custom_sections"]:
+            items = "\n".join(f"- {item}" for item in section["items"])
+            sections.append(f"{section['title']}:\n{items}")
     business_info = "\n\n".join(sections)
     return_policy = f"\n- Return Policy: {data['return_policy']}" if "return_policy" in data else ""
     language_instruction = f"\nLANGUAGE: {data['language']}" if "language" in data else ""
@@ -137,14 +186,56 @@ def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
         print(f"⚠ Lead email failed ({e}): {name} | {contact}")
         return f"Lead captured: {name} ({contact})"
 
-# ── MCP plumbing ───────────────────────────────────────────────────────────────
+# ── MCP — persistent worker keeps one subprocess alive ────────────────────────
 def _mcp_params() -> StdioServerParameters:
     return StdioServerParameters(
         command="python",
         args=[os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_server.py")],
     )
 
-async def _fetch_mcp_tools() -> list[dict]:
+_bg_loop = asyncio.new_event_loop()
+threading.Thread(target=_bg_loop.run_forever, daemon=True, name="mcp-loop").start()
+
+_mcp_call_queue = None
+_mcp_ready = threading.Event()
+
+async def _mcp_worker():
+    global _mcp_call_queue
+    _mcp_call_queue = asyncio.Queue()
+    _mcp_ready.set()
+    while True:
+        try:
+            async with stdio_client(_mcp_params()) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    print("✓ MCP worker: session ready")
+                    while True:
+                        item = await _mcp_call_queue.get()
+                        if item is None:
+                            return
+                        name, args, fut = item
+                        try:
+                            result = await session.call_tool(name, args)
+                            fut.set_result(result.content[0].text)
+                        except Exception as exc:
+                            fut.set_exception(exc)
+                        _mcp_call_queue.task_done()
+        except Exception as e:
+            print(f"⚠ MCP worker crashed ({e}), restarting in 2s")
+            # Fail pending calls immediately so callers don't hang 30s.
+            while not _mcp_call_queue.empty():
+                try:
+                    item = _mcp_call_queue.get_nowait()
+                    if item is not None:
+                        _, _, fut = item
+                        if not fut.done():
+                            fut.set_exception(RuntimeError(f"MCP worker restarting: {e}"))
+                        _mcp_call_queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+            await asyncio.sleep(2)
+
+async def _fetch_mcp_tools_once() -> list[dict]:
     async with stdio_client(_mcp_params()) as (read, write):
         async with ClientSession(read, write) as s:
             await s.initialize()
@@ -154,12 +245,15 @@ async def _fetch_mcp_tools() -> list[dict]:
                 for t in result.tools
             ]
 
-async def _call_mcp_tool(name: str, args: dict) -> str:
-    async with stdio_client(_mcp_params()) as (read, write):
-        async with ClientSession(read, write) as s:
-            await s.initialize()
-            result = await s.call_tool(name, args)
-            return result.content[0].text
+def _call_mcp_tool_sync(name: str, args: dict) -> str:
+    """Submit a tool call to the persistent MCP worker and block until done."""
+    _mcp_ready.wait(timeout=10)
+    loop = _bg_loop
+    async def _dispatch():
+        f = loop.create_future()
+        await _mcp_call_queue.put((name, args, f))
+        return await f
+    return asyncio.run_coroutine_threadsafe(_dispatch(), loop).result(timeout=30)
 
 # ── Tool startup ───────────────────────────────────────────────────────────────
 _mcp_available = False
@@ -167,19 +261,22 @@ _MCP_ENABLED = os.environ.get("MCP_ENABLED", "true").lower() == "true"
 
 if _MCP_ENABLED:
     try:
-        TOOLS = asyncio.run(_fetch_mcp_tools())
-        TOOLS.append(LEAD_CAPTURE_TOOL)
+        _mcp_tools = asyncio.run_coroutine_threadsafe(
+            _fetch_mcp_tools_once(), _bg_loop
+        ).result(timeout=15)
+        TOOLS = _mcp_tools + [LEAD_CAPTURE_TOOL]
+        asyncio.run_coroutine_threadsafe(_mcp_worker(), _bg_loop)
+        _mcp_ready.wait(timeout=5)
         _mcp_available = True
         print(f"✓ MCP: loaded {[t['name'] for t in TOOLS]}")
     except Exception as _e:
-        # MCP unavailable: product/service/FAQ already in system prompt.
-        # Only lead capture needs a tool.
+        # MCP unavailable. FAQ answers are in the system prompt,
+        # products/services too — only lead capture needs a tool.
         TOOLS = [LEAD_CAPTURE_TOOL]
         _mcp_available = False
         print(f"⚠ MCP unavailable ({_e}) — lead capture only")
 else:
     TOOLS = [LEAD_CAPTURE_TOOL]
-    _mcp_available = False
     print("⚠ MCP_ENABLED=false — lead capture only")
 
 def run_tool(tool_name: str, tool_input: dict) -> str:
@@ -190,8 +287,15 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
             service_interest=tool_input.get("service_interest", ""),
         )
     if _mcp_available:
-        return asyncio.run(_call_mcp_tool(tool_name, tool_input))
-    return f"Tool unavailable: {tool_name}"
+        try:
+            return _call_mcp_tool_sync(tool_name, tool_input)
+        except Exception as e:
+            # MCP crashed or timed out mid-request. Return a graceful string so
+            # Claude gets a tool result and can reply normally instead of the
+            # whole stream dying with a generic "Something went wrong" error.
+            print(f"⚠ MCP tool call failed ({e}): {tool_name}")
+            return "Tool temporarily unavailable. Please direct the customer to contact us directly."
+    return "Tool unavailable — please direct the customer to contact us directly."
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 @app.route("/")
@@ -206,19 +310,18 @@ def chat():
     if not body or not body.get("message"):
         return jsonify({"error": "Message cannot be empty."}), 400
     user_message = body["message"].strip()
-    if len(user_message) > 500:
-        return jsonify({"error": "Message too long. Please keep it under 500 characters."}), 400
     if not user_message:
         return jsonify({"error": "Message cannot be empty."}), 400
+    if len(user_message) > 500:
+        return jsonify({"error": "Message too long. Please keep it under 500 characters."}), 400
 
-    history = body.get("history", [])
+    session_id, history = get_session(body.get("session_id"))
     history.append({"role": "user", "content": user_message})
-    history = history[-MAX_HISTORY_MESSAGES:]
 
     def generate():
         nonlocal history
         try:
-            final_response = None
+            used_tools = False
 
             for _ in range(MAX_TOOL_ITERATIONS):
                 response = client.messages.create(
@@ -228,11 +331,9 @@ def chat():
                     tools=TOOLS,
                     messages=history,
                 )
-
                 if response.stop_reason != "tool_use":
-                    final_response = response
                     break
-
+                used_tools = True
                 asst_content = []
                 for block in response.content:
                     if block.type == "tool_use":
@@ -262,23 +363,29 @@ def chat():
                 if lead_captured:
                     break
 
-            if final_response is None:
-                final_response = client.messages.create(
+            if used_tools:
+                # Real streaming call after tool use — no tools passed, prevents
+                # further tool loops and saves tool schema tokens on this call.
+                full_reply: list[str] = []
+                with client.messages.stream(
                     model=MODEL_NAME,
                     max_tokens=300,
                     system=SYSTEM_PROMPT,
-                    tools=TOOLS,
                     messages=history,
-                )
-
-            # Stream text locally — zero extra API cost
-            final_text = "".join(b.text for b in final_response.content if hasattr(b, "text"))
-            for char in final_text:
-                yield f"data: {json.dumps({'token': char})}\n\n"
+                ) as stream:
+                    for text in stream.text_stream:
+                        full_reply.append(text)
+                        yield f"data: {json.dumps({'token': text})}\n\n"
+                final_text = "".join(full_reply)
+            else:
+                # No tool use — stream the existing response locally, zero extra API cost.
+                final_text = "".join(b.text for b in response.content if hasattr(b, "text"))
+                for char in final_text:
+                    yield f"data: {json.dumps({'token': char})}\n\n"
 
             history.append({"role": "assistant", "content": final_text})
-            trimmed = history[-MAX_HISTORY_MESSAGES:]
-            yield f"data: {json.dumps({'done': True, 'history': trimmed})}\n\n"
+            save_session(session_id, history)
+            yield f"data: {json.dumps({'done': True, 'session_id': session_id})}\n\n"
 
         except anthropic.AuthenticationError:
             yield f"data: {json.dumps({'error': 'Invalid API key. Check your configuration.'})}\n\n"
@@ -300,6 +407,10 @@ def chat():
 
 @app.route("/reset", methods=["POST"])
 def reset():
+    session_id = request.json.get("session_id") if request.json else None
+    if session_id:
+        with _sessions_lock:
+            _sessions.pop(session_id, None)
     return jsonify({"message": "Conversation reset."})
 
 @app.errorhandler(429)
