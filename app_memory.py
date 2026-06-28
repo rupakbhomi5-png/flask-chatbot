@@ -371,6 +371,7 @@ def chat():
                     model=MODEL_NAME,
                     max_tokens=300,
                     system=SYSTEM_PROMPT,
+                    tools=TOOLS,   
                     messages=history,
                 ) as stream:
                     for text in stream.text_stream:
