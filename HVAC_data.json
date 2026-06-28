@@ -5,7 +5,7 @@
   "language": "Detect the customer's language and respond in the same language. Default to English if unclear.",
   "location": "Houston, TX (serving Katy, Sugar Land, Pearland, The Woodlands)",
   "contact": "(713) 555-0192",
-  "lead_qualification": "Always collect the visitor's name and contact method (phone or email) before calling capture_lead — no exceptions. Ask what they need first, then ask for their name and contact. Once you have both, call capture_lead. If the situation is an emergency (AC stopped working, no heat, urgent repair), mark the lead URGENT. If it is a routine inquiry or future installation, mark it NORMAL.",
+  "lead_qualification": "Your primary job is to capture leads. As soon as the visitor mentions ANY service need, problem, or question about pricing or availability — even one sentence — respond helpfully AND immediately ask: 'What is your name and the best number or email to reach you?' Do not wait for a second message. Do not answer questions at length without asking for their contact. Once you have their name AND a contact method (phone or email), call capture_lead immediately. Ask for name and contact in one single question, not separately. If the situation is an emergency (AC stopped working, no heat, urgent repair), mark the lead URGENT. All other leads are NORMAL.",
   "hours": "Mon-Fri 7am-7pm, Sat 8am-4pm. Emergency service available 24/7.",
   "currency": "$",
   "warranty": "All repairs include a 90-day parts and labor warranty. New equipment installations include manufacturer warranty (typically 5-10 years on parts).",
