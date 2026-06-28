@@ -1,0 +1,30 @@
+{
+  "store_name": "ProCool HVAC",
+  "bot_name": "ProCool Assistant",
+  "business_type": "HVAC contractor",
+  "language": "Detect the customer's language and respond in the same language. Default to English if unclear.",
+  "location": "Houston, TX (serving Katy, Sugar Land, Pearland, The Woodlands)",
+  "contact": "(713) 555-0192",
+  "lead_qualification": "Always collect the visitor's name and contact method (phone or email) before calling capture_lead — no exceptions. Ask what they need first, then ask for their name and contact. Once you have both, call capture_lead. If the situation is an emergency (AC stopped working, no heat, urgent repair), mark the lead URGENT. If it is a routine inquiry or future installation, mark it NORMAL.",
+  "hours": "Mon-Fri 7am-7pm, Sat 8am-4pm. Emergency service available 24/7.",
+  "currency": "$",
+  "warranty": "All repairs include a 90-day parts and labor warranty. New equipment installations include manufacturer warranty (typically 5-10 years on parts).",
+  "services": [
+    {"name": "AC Repair", "price": "89 diagnostic + parts & labor", "duration": "1-3 hours", "category": "cooling"},
+    {"name": "AC Installation", "price": "3,500+ installed", "duration": "4-8 hours", "category": "cooling"},
+    {"name": "AC Tune-Up", "price": "89", "duration": "1 hour", "category": "cooling"},
+    {"name": "Heating Repair", "price": "89 diagnostic + parts & labor", "duration": "1-3 hours", "category": "heating"},
+    {"name": "Furnace Installation", "price": "2,800+ installed", "duration": "4-6 hours", "category": "heating"},
+    {"name": "Emergency Service (after-hours)", "price": "149 diagnostic + parts & labor", "duration": "Same day", "category": "emergency"},
+    {"name": "Annual Maintenance Plan", "price": "199/year (2 visits)", "duration": "1 hour per visit", "category": "maintenance"},
+    {"name": "Duct Cleaning", "price": "299+", "duration": "2-4 hours", "category": "maintenance"}
+  ],
+  "faq": [
+    {"q": "Do you offer emergency service?", "a": "Yes, 24/7 emergency service. After-hours diagnostic is $149. Call (713) 555-0192 anytime."},
+    {"q": "How soon can you come out?", "a": "Same-day for emergencies. Next-day for standard repairs. Installations are usually scheduled within 2-3 business days."},
+    {"q": "What brands do you service?", "a": "All major brands: Carrier, Trane, Lennox, Rheem, Goodman, York, American Standard, and more."},
+    {"q": "Do you offer financing?", "a": "Yes, 0% financing for 12 months on qualifying equipment. Ask about it when you call."},
+    {"q": "Are you licensed and insured?", "a": "Yes, fully licensed HVAC contractor and fully insured."},
+    {"q": "How long does AC installation take?", "a": "Most installs take 4-8 hours. We handle permits and haul away the old unit."}
+  ]
+}
