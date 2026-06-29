@@ -1,11 +1,11 @@
 {
   "store_name": "Raj Cassette",
-  "bot_name" : "Raj",
-  "business_type" : "electronics retail store",
+  "bot_name": "Raj",
+  "business_type": "electronics retail store",
   "language": "Detect the customer's language and script and match it exactly. If they write in Nepali Devanagari script, respond in Nepali Devanagari. If they write in Roman Nepali (transliterated Nepali like 'tapai lai kasto cha'), respond in Roman Nepali. If they write in English, respond in English. Never respond in Hindi under any circumstance.",
-  "location" : "Bhaktapur",
+  "location": "Bhaktapur",
   "contact": "01-6613547, 9849170890",
-  "lead_qualification": "Always collect the visitor's name and contact method (phone or email) before calling capture_lead — no exceptions. Ask what they need first, then ask for their name and contact. Once you have both, call capture_lead. If the situation is an emergency (active leak, storm damage, urgent repair), mark the lead URGENT. If it is a routine inquiry or future quote, mark it NORMAL.",
+  "lead_qualification": "As soon as the visitor asks about any product, price, availability, or repair — even one sentence — acknowledge it warmly and ask: 'What is your name and best number or email?' That is the only question you ever ask. Do not ask them to describe their need in detail. Once you have a name and any contact (phone or email), call capture_lead immediately. Do not ask for confirmation. Parse naturally: a 10-digit number is a phone, anything with @ is an email, a word that is not a number is a name. If they write 'ram 9876543210' that is name=Ram, contact=9876543210 — call capture_lead right away. Mark URGENT only if they explicitly say urgent or need it today. Everything else is NORMAL.",
   "hours": "8am - 7pm daily",
   "currency": "NPR",
   "return_policy": "7 days return policy on all products",
@@ -66,11 +66,10 @@
     {"name": "Silvertek Infrared Cooker", "price": 3500, "category": "appliances"},
     {"name": "T9 Hair Trimmer", "price": 850, "category": "appliances"}
   ],
-     "faq": [
-    {"q": "Do you repair electronics?","a": "Yes, we do repairs. Pricing depends on the problem — bring the item in for a free assessment or call us at 01-6613547 / 9849170890."},
-    {"q": "How much does repair cost?","a": "Repair costs vary by issue and cannot be quoted without inspection. Bring it in or call 01-6613547 / 9849170890 for details."},
-    {"q": "Do you repair TVs?","a": "Yes. TV repair pricing depends on the fault — visit us or call 01-6613547 / 9849170890 to discuss."},
-    { "q": "Do you repair speakers?","a": "Yes. Speaker repair pricing depends on the damage — visit us or call 01-6613547 / 9849170890."}
-  ] 
-    
+  "faq": [
+    {"q": "Do you repair electronics?", "a": "Yes, we do repairs. Pricing depends on the problem — bring the item in for a free assessment or call us at 01-6613547 / 9849170890."},
+    {"q": "How much does repair cost?", "a": "Repair costs vary by issue and cannot be quoted without inspection. Bring it in or call 01-6613547 / 9849170890 for details."},
+    {"q": "Do you repair TVs?", "a": "Yes. TV repair pricing depends on the fault — visit us or call 01-6613547 / 9849170890 to discuss."},
+    {"q": "Do you repair speakers?", "a": "Yes. Speaker repair pricing depends on the damage — visit us or call 01-6613547 / 9849170890."}
+  ]
 }

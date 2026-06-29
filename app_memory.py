@@ -14,7 +14,6 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 load_dotenv(override=True)
-
 assert os.environ.get("ANTHROPIC_API_KEY"), "Missing ANTHROPIC_API_KEY — set it before starting"
 
 app = Flask(__name__)
@@ -25,12 +24,11 @@ def redirect_to_https():
         url = request.url.replace("http://", "https://", 1)
         return redirect(url, code=301)
 
-MAX_HISTORY_MESSAGES = 6    # 3 exchanges — enough for a support/sales bot
+MAX_HISTORY_MESSAGES = 6
 MODEL_NAME = "claude-haiku-4-5-20251001"
 MAX_TOOL_ITERATIONS = 3
 SESSION_TTL = 3600
 
-# Redis-backed rate limiter when REDIS_URL is set; memory-only for single-worker dev
 _redis_url = os.environ.get("REDIS_URL")
 if not _redis_url:
     print("⚠ REDIS_URL not set — rate limiter uses memory (single-worker only, resets on restart)")
@@ -45,7 +43,6 @@ limiter = Limiter(
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
 # ── Server-side session store ─────────────────────────────────────────────────
-# History lives on the server so clients cannot inject fake assistant turns.
 _sessions: dict = {}
 _sessions_lock = threading.Lock()
 
@@ -97,17 +94,8 @@ def build_system_prompt(data: dict) -> str:
         )
         sections.append(f"SERVICES:\n{service_list}")
     if "faq" in data:
-        # Full Q&A pairs — bot answers FAQ directly without a tool call.
-        # No get_faq tool needed in fallback mode.
         faq_list = "\n".join(f"Q: {item['q']}\nA: {item['a']}" for item in data["faq"])
         sections.append(f"FAQ:\n{faq_list}")
-    if "custom_sections" in data:
-        # Generic sections for any business type — dental insurance lists,
-        # restaurant menus, law firm practice areas, etc.
-        # JSON shape: [{"title": "SECTION TITLE", "items": ["item 1", "item 2"]}]
-        for section in data["custom_sections"]:
-            items = "\n".join(f"- {item}" for item in section["items"])
-            sections.append(f"{section['title']}:\n{items}")
     business_info = "\n\n".join(sections)
     return_policy = f"\n- Return Policy: {data['return_policy']}" if "return_policy" in data else ""
     language_instruction = f"\nLANGUAGE: {data['language']}" if "language" in data else ""
@@ -124,11 +112,18 @@ BUSINESS INFO:
 
 {business_info}
 
-RULES: Never invent products, services, or prices not listed above. Never promise stock or availability. For anything not listed, direct to {data['contact']}.
+RULES: Never invent products, services, or prices not listed above. Never promise stock or availability. For anything not listed, direct to {data['contact']}. Never volunteer prices, service options, or package lists unless the customer directly asks "how much" or "what do you offer" — unsolicited pitching kills trust.
 
-LEAD CAPTURE: The moment a visitor gives both a name AND a contact (phone or email), call capture_lead immediately — no confirmation, no follow-up questions. Then tell them someone will be in touch.
+LEAD CAPTURE RULES:
+- Your only goal is to get a name and a way to reach them (phone or email). That is it.
+- Do NOT require them to explain or diagnose their problem. "Something's broken" or "need help" is enough — capture the lead.
+- Parse name and contact from whatever they write naturally. If they write "ram 9876543210", that is name=Ram, contact=9876543210. Do not ask them to reformat. Do not ask them to say "my name is" or "my number is".
+- A 10-digit number is a phone. Anything with @ is an email. A word that is not a number is a name.
+- The moment you have a name AND a contact, call capture_lead. No confirmation, no follow-up questions.
+- After capturing, tell them: "Got it — someone will call you shortly." Nothing else.
+- service_interest: summarize what they mentioned in a few words. If they said nothing specific, use "General inquiry".
 
-3 sentences max. Be friendly but precise.{language_instruction}{lead_rules}"""
+Keep replies to 1-2 sentences. Be warm, not salesy.{language_instruction}{lead_rules}"""
 
 DATA = load_data()
 SYSTEM_PROMPT = build_system_prompt(DATA)
@@ -195,7 +190,6 @@ def _mcp_params() -> StdioServerParameters:
 
 _bg_loop = asyncio.new_event_loop()
 threading.Thread(target=_bg_loop.run_forever, daemon=True, name="mcp-loop").start()
-
 _mcp_call_queue = None
 _mcp_ready = threading.Event()
 
@@ -222,7 +216,6 @@ async def _mcp_worker():
                         _mcp_call_queue.task_done()
         except Exception as e:
             print(f"⚠ MCP worker crashed ({e}), restarting in 2s")
-            # Fail pending calls immediately so callers don't hang 30s.
             while not _mcp_call_queue.empty():
                 try:
                     item = _mcp_call_queue.get_nowait()
@@ -270,14 +263,14 @@ if _MCP_ENABLED:
         _mcp_available = True
         print(f"✓ MCP: loaded {[t['name'] for t in TOOLS]}")
     except Exception as _e:
-        # MCP unavailable. FAQ answers are in the system prompt,
-        # products/services too — only lead capture needs a tool.
         TOOLS = [LEAD_CAPTURE_TOOL]
         _mcp_available = False
-        print(f"⚠ MCP unavailable ({_e}) — lead capture only")
+        print(f"⚠ MCP unavailable ({_e})")
+        print("  → Products, services, and FAQ are covered by the system prompt.")
+        print("  → Only lead capture requires a tool — that is still active.")
 else:
     TOOLS = [LEAD_CAPTURE_TOOL]
-    print("⚠ MCP_ENABLED=false — lead capture only")
+    print("⚠ MCP_ENABLED=false — products/services/FAQ answered from system prompt, lead capture active.")
 
 def run_tool(tool_name: str, tool_input: dict) -> str:
     if tool_name == "capture_lead":
@@ -287,15 +280,8 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
             service_interest=tool_input.get("service_interest", ""),
         )
     if _mcp_available:
-        try:
-            return _call_mcp_tool_sync(tool_name, tool_input)
-        except Exception as e:
-            # MCP crashed or timed out mid-request. Return a graceful string so
-            # Claude gets a tool result and can reply normally instead of the
-            # whole stream dying with a generic "Something went wrong" error.
-            print(f"⚠ MCP tool call failed ({e}): {tool_name}")
-            return "Tool temporarily unavailable. Please direct the customer to contact us directly."
-    return "Tool unavailable — please direct the customer to contact us directly."
+        return _call_mcp_tool_sync(tool_name, tool_input)
+    return f"Tool unavailable: {tool_name}"
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 @app.route("/")
@@ -346,7 +332,6 @@ def chat():
                     elif block.type == "text":
                         asst_content.append({"type": "text", "text": block.text})
                 history.append({"role": "assistant", "content": asst_content})
-
                 tool_results = []
                 lead_captured = False
                 for block in response.content:
@@ -364,14 +349,11 @@ def chat():
                     break
 
             if used_tools:
-                # Real streaming call after tool use — no tools passed, prevents
-                # further tool loops and saves tool schema tokens on this call.
                 full_reply: list[str] = []
                 with client.messages.stream(
                     model=MODEL_NAME,
                     max_tokens=300,
                     system=SYSTEM_PROMPT,
-                    tools=TOOLS,   
                     messages=history,
                 ) as stream:
                     for text in stream.text_stream:
@@ -379,7 +361,6 @@ def chat():
                         yield f"data: {json.dumps({'token': text})}\n\n"
                 final_text = "".join(full_reply)
             else:
-                # No tool use — stream the existing response locally, zero extra API cost.
                 final_text = "".join(b.text for b in response.content if hasattr(b, "text"))
                 for char in final_text:
                     yield f"data: {json.dumps({'token': char})}\n\n"
