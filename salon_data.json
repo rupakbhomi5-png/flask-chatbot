@@ -5,7 +5,7 @@
     "location": "Austin, Texas",
     "hours": "mon-sat 9am-7pm",
     "contact": "11-22334",
-    "lead_qualification": "Always collect the visitor's name and contact method (phone or email) before calling capture_lead — no exceptions. Ask what they need first, then ask for their name and contact. Once you have both, call capture_lead. If the situation is an emergency (active leak, storm damage, urgent repair), mark the lead URGENT. If it is a routine inquiry or future quote, mark it NORMAL.",
+    "lead_qualification": "Always collect the visitor's name and contact method (phone or email) before calling capture_lead — no exceptions. Ask what they need first, then ask for their name and contact. Once you have both, call capture_lead. If the situation is an emergency (active leak, storm damage, urgent repair), mark the lead URGENT. If it is a routine inquiry or future quote, mark it NORMAL. CRITICAL RULE: Never call capture_lead until the visitor has actually typed a real phone number or email address in this conversation. Never invent, guess, or placeholder the contact field. If you only have a name, keep asking for the number or email. contact='pending' or any made-up value is forbidden.",
     "currency": "$",
     "services": [
         {"name": "Haircut", "price": 45, "duration": "45 min", "category": "haircut"},
