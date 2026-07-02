@@ -2,8 +2,6 @@ import os
 import json
 import asyncio
 import threading
-import time
-import secrets
 import urllib.request
 import anthropic
 from flask import Flask, request, jsonify, render_template, Response, stream_with_context, redirect
@@ -27,7 +25,6 @@ def redirect_to_https():
 MAX_HISTORY_MESSAGES = 6
 MODEL_NAME = "claude-haiku-4-5-20251001"
 MAX_TOOL_ITERATIONS = 3
-SESSION_TTL = 3600
 
 _redis_url = os.environ.get("REDIS_URL")
 if not _redis_url:
@@ -42,34 +39,30 @@ limiter = Limiter(
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
-# ── Server-side session store ─────────────────────────────────────────────────
-_sessions: dict = {}
-_sessions_lock = threading.Lock()
-
-def _purge_old_sessions():
-    cutoff = time.time() - SESSION_TTL
-    with _sessions_lock:
-        stale = [k for k, v in _sessions.items() if v["ts"] < cutoff]
-        for k in stale:
-            del _sessions[k]
-
-def get_session(session_id):
-    """Return (session_id, history_copy). Creates new session if id is unknown."""
-    _purge_old_sessions()
-    with _sessions_lock:
-        if session_id and session_id in _sessions:
-            entry = _sessions[session_id]
-            entry["ts"] = time.time()
-            return session_id, list(entry["history"])
-        new_id = secrets.token_urlsafe(32)
-        _sessions[new_id] = {"history": [], "ts": time.time()}
-        return new_id, []
-
-def save_session(session_id, history):
-    with _sessions_lock:
-        if session_id in _sessions:
-            _sessions[session_id]["history"] = history[-MAX_HISTORY_MESSAGES:]
-            _sessions[session_id]["ts"] = time.time()
+# ── Stateless conversation history ────────────────────────────────────────────
+# The browser holds the conversation: it sends its text-only history with every
+# /chat request and receives the updated history back in the SSE "done" event.
+# No server-side state — survives Render restarts and works across gunicorn
+# workers. (Templates already speak this protocol: {message, history} in,
+# payload.history out.)
+def sanitize_history(raw) -> list:
+    """Validate client-supplied history: text-only user/assistant turns.
+    Anything malformed is dropped — the client is not trusted."""
+    if not isinstance(raw, list):
+        return []
+    clean = []
+    for item in raw[-(MAX_HISTORY_MESSAGES * 2):]:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = item.get("content")
+        if role not in ("user", "assistant") or not isinstance(content, str):
+            continue
+        clean.append({"role": role, "content": content[:2000]})
+    clean = clean[-MAX_HISTORY_MESSAGES:]
+    while clean and clean[0]["role"] != "user":
+        clean.pop(0)  # Claude API requires the first message to be from the user
+    return clean
 
 # ── Data & system prompt — loaded ONCE at startup ─────────────────────────────
 def load_data() -> dict:
@@ -301,8 +294,9 @@ def chat():
     if len(user_message) > 500:
         return jsonify({"error": "Message too long. Please keep it under 500 characters."}), 400
 
-    session_id, history = get_session(body.get("session_id"))
+    history = sanitize_history(body.get("history"))
     history.append({"role": "user", "content": user_message})
+    client_history = list(history)  # text-only view returned to the browser
 
     def generate():
         nonlocal history
@@ -365,9 +359,11 @@ def chat():
                 for char in final_text:
                     yield f"data: {json.dumps({'token': char})}\n\n"
 
-            history.append({"role": "assistant", "content": final_text})
-            save_session(session_id, history)
-            yield f"data: {json.dumps({'done': True, 'session_id': session_id})}\n\n"
+            client_history.append({"role": "assistant", "content": final_text})
+            trimmed = client_history[-MAX_HISTORY_MESSAGES:]
+            while trimmed and trimmed[0]["role"] != "user":
+                trimmed = trimmed[1:]
+            yield f"data: {json.dumps({'done': True, 'history': trimmed})}\n\n"
 
         except anthropic.AuthenticationError:
             yield f"data: {json.dumps({'error': 'Invalid API key. Check your configuration.'})}\n\n"
@@ -389,10 +385,7 @@ def chat():
 
 @app.route("/reset", methods=["POST"])
 def reset():
-    session_id = request.json.get("session_id") if request.json else None
-    if session_id:
-        with _sessions_lock:
-            _sessions.pop(session_id, None)
+    # Stateless server — the browser clears its own history; nothing stored here.
     return jsonify({"message": "Conversation reset."})
 
 @app.errorhandler(429)
