@@ -273,7 +273,17 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
             service_interest=tool_input.get("service_interest", ""),
         )
     if _mcp_available:
-        return _call_mcp_tool_sync(tool_name, tool_input)
+        try:
+            return _call_mcp_tool_sync(tool_name, tool_input)
+        except Exception as e:
+            # MCP worker crashed or timed out mid-conversation. Return a graceful
+            # string so Claude answers from the system prompt instead of the
+            # exception killing the SSE stream.
+            print(f"⚠ MCP tool call failed ({tool_name}): {e}")
+            return (
+                f"Tool '{tool_name}' is temporarily unavailable. "
+                "Answer from the business information you already have."
+            )
     return f"Tool unavailable: {tool_name}"
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
