@@ -22,6 +22,28 @@ def redirect_to_https():
         url = request.url.replace("http://", "https://", 1)
         return redirect(url, code=301)
 
+@app.after_request
+def set_security_headers(response):
+    # Templates use inline <script>/<style> (no external JS/CSS files) and
+    # one external favicon from fav.farm — CSP below matches that as-is.
+    # Revisit if templates move to external assets or nonces.
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' https://fav.farm data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+    return response
+
 MAX_HISTORY_MESSAGES = 6
 MODEL_NAME = "claude-haiku-4-5-20251001"
 MAX_TOOL_ITERATIONS = 3
