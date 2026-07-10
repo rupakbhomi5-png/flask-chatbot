@@ -89,7 +89,7 @@ def sanitize_history(raw) -> list:
 # ── Data & system prompt — loaded ONCE at startup ─────────────────────────────
 def load_data() -> dict:
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    data_file = os.environ.get("DATA_FILE", "business_data.json")
+    data_file = os.environ.get("DATA_FILE", "pm_data.json")
     with open(os.path.join(base_dir, data_file), "r") as f:
         return json.load(f)
 
@@ -111,6 +111,12 @@ def build_system_prompt(data: dict) -> str:
     if "faq" in data:
         faq_list = "\n".join(f"Q: {item['q']}\nA: {item['a']}" for item in data["faq"])
         sections.append(f"FAQ:\n{faq_list}")
+
+    if "custom_sections" in data:
+        for sec in data["custom_sections"]:
+            item_list = "\n".join(f"- {i}" for i in sec["items"])
+            sections.append(f"{sec['title']}: \n{item_list}")
+
     business_info = "\n\n".join(sections)
     return_policy = f"\n- Return Policy: {data['return_policy']}" if "return_policy" in data else ""
     language_instruction = f"\nLANGUAGE: {data['language']}" if "language" in data else ""
