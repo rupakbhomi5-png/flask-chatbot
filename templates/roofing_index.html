@@ -285,9 +285,11 @@
 <script>
     const BOT_NAME = "{{ bot_name }}";
 
-    // Conversation history lives here — sent to server with every message,
-    // returned updated in the done event. Server holds zero state.
-    let conversationHistory = [];
+    // Conversation history lives in sessionStorage so it survives a page
+    // refresh (F5) within the same tab, but never leaks between different
+    // tabs/visitors — sessionStorage is per-tab and clears when the tab closes.
+    // Server stays fully stateless either way (see app_memory.py comment block).
+    let conversationHistory = JSON.parse(sessionStorage.getItem("conversationHistory") || "[]");
 
     function appendMessage(sender, text, cssClass) {
         const box = document.getElementById("chat-box");
@@ -308,6 +310,19 @@
         div.textContent = str;
         return div.innerHTML;
     }
+
+    // Redraw any history restored from sessionStorage so the visible chat
+    // log matches what the server will see on the next message.
+    function renderStoredHistory() {
+        for (const turn of conversationHistory) {
+            if (turn.role === "user") {
+                appendMessage("You", escapeHtml(turn.content), "user");
+            } else if (turn.role === "assistant") {
+                appendMessage(BOT_NAME, escapeHtml(turn.content), "assistant");
+            }
+        }
+    }
+    renderStoredHistory();
 
     async function sendMessage() {
         const input = document.getElementById("user-input");
@@ -353,6 +368,7 @@
                             document.getElementById("chat-box").scrollTop = document.getElementById("chat-box").scrollHeight;
                         } else if (payload.done && payload.history) {
                             conversationHistory = payload.history;
+                            sessionStorage.setItem("conversationHistory", JSON.stringify(conversationHistory));
                         } else if (payload.error) {
                             botEl.textContent = payload.error;
                         }
@@ -370,6 +386,7 @@
 
     async function resetChat() {
         conversationHistory = [];
+        sessionStorage.removeItem("conversationHistory");
         await fetch("/reset", { method: "POST" });
         document.getElementById("chat-box").innerHTML = "";
     }
