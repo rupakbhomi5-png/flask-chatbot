@@ -48,6 +48,16 @@ MAX_HISTORY_MESSAGES = 6
 MODEL_NAME = "claude-haiku-4-5-20251001"
 MAX_TOOL_ITERATIONS = 3
 
+# ── Self-test IP allowlist ─────────────────────────────────────────────────────
+# Add every IP you personally test from (home, phone hotspot, etc.). Check
+# "what is my ip" from each connection. This is best-effort, not exact — IPs
+# change, and this won't catch every self-test, but it kills the ambiguity
+# for the common case (testing from your usual home connection).
+MY_KNOWN_IPS = [
+    "103.146.218.61",
+    # "REPLACE_WITH_YOUR_PHONE_HOTSPOT_IP",
+]
+
 _redis_url = os.environ.get("REDIS_URL")
 if not _redis_url:
     print("⚠ REDIS_URL not set — rate limiter uses memory (single-worker only, resets on restart)")
@@ -164,24 +174,26 @@ LEAD_CAPTURE_TOOL = {
     },
 }
 
-def send_lead_email(name: str, contact: str, service_interest: str = "") -> str:
+def send_lead_email(name: str, contact: str, service_interest: str = "", visitor_ip: str = "") -> str:
     """Notify the business owner via SendGrid when a lead is captured."""
     api_key = os.environ.get("SENDGRID_API_KEY")
     owner_email = os.environ.get("OWNER_EMAIL")
     from_email = os.environ.get("FROM_EMAIL", "noreply@example.com")
     if not all([api_key, owner_email]):
-        print(f"⚠ LEAD (SendGrid not configured): {name} | {contact} | {service_interest}")
+        print(f"⚠ LEAD (SendGrid not configured): {name} | {contact} | {service_interest} | IP: {visitor_ip}")
         return f"Lead captured: {name} ({contact})"
     store_name = DATA.get("store_name", "Your Business")
+    tag = "[SELF-TEST] " if visitor_ip in MY_KNOWN_IPS else "[REAL LEAD] "
     payload = json.dumps({
         "personalizations": [{"to": [{"email": owner_email}]}],
         "from": {"email": from_email},
-        "subject": f"New inquiry from {store_name}",
+        "subject": f"{tag}New inquiry from {store_name}",
         "content": [{"type": "text/plain", "value": (
             f"New lead from your website chatbot.\n\n"
             f"Name:      {name}\n"
             f"Contact:   {contact}\n"
-            f"Interested in: {service_interest or 'not specified'}\n\n"
+            f"Interested in: {service_interest or 'not specified'}\n"
+            f"IP:        {visitor_ip or 'unknown'}\n\n"
             f"Reply within the hour — they are still on your site."
         )}],
     }).encode("utf-8")
@@ -293,12 +305,13 @@ else:
     TOOLS = [LEAD_CAPTURE_TOOL]
     print("⚠ MCP_ENABLED=false — products/services/FAQ answered from system prompt, lead capture active.")
 
-def run_tool(tool_name: str, tool_input: dict) -> str:
+def run_tool(tool_name: str, tool_input: dict, visitor_ip: str = "") -> str:
     if tool_name == "capture_lead":
         return send_lead_email(
             name=tool_input.get("name", ""),
             contact=tool_input.get("contact", ""),
             service_interest=tool_input.get("service_interest", ""),
+            visitor_ip=visitor_ip,
         )
     if _mcp_available:
         try:
@@ -331,6 +344,13 @@ def chat():
         return jsonify({"error": "Message cannot be empty."}), 400
     if len(user_message) > 500:
         return jsonify({"error": "Message too long. Please keep it under 500 characters."}), 400
+
+    # Capture the real visitor IP (Render sits behind a proxy, so check
+    # X-Forwarded-For first — it can be a comma-separated list; the first
+    # entry is the original client).
+    visitor_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+    if visitor_ip:
+        visitor_ip = visitor_ip.split(",")[0].strip()
 
     history = sanitize_history(body.get("history"))
     history.append({"role": "user", "content": user_message})
@@ -368,7 +388,7 @@ def chat():
                 lead_captured = False
                 for block in response.content:
                     if block.type == "tool_use":
-                        result = run_tool(block.name, block.input)
+                        result = run_tool(block.name, block.input, visitor_ip)
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
