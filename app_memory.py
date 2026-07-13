@@ -54,7 +54,7 @@ MAX_TOOL_ITERATIONS = 3
 # change, and this won't catch every self-test, but it kills the ambiguity
 # for the common case (testing from your usual home connection).
 MY_KNOWN_IPS = [
-    "103.146.218.61",
+    "REPLACE_WITH_YOUR_HOME_IP",
     # "REPLACE_WITH_YOUR_PHONE_HOTSPOT_IP",
 ]
 
@@ -62,8 +62,15 @@ _redis_url = os.environ.get("REDIS_URL")
 if not _redis_url:
     print("⚠ REDIS_URL not set — rate limiter uses memory (single-worker only, resets on restart)")
 
+def get_real_ip():
+    """Render's proxy makes request.remote_addr always 127.0.0.1 — read the
+    real visitor IP from X-Forwarded-For instead, or the limiter treats every
+    visitor as the same client."""
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+    return ip.split(",")[0].strip() if ip else request.remote_addr
+
 limiter = Limiter(
-    get_remote_address,
+    get_real_ip,
     app=app,
     default_limits=["200 per day", "50 per hour"],
     storage_uri=_redis_url or "memory://",
