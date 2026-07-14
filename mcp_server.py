@@ -20,20 +20,27 @@ def load_data() -> dict:
         return json.load(f)
 # Load once at startup - tools are registered based on what keys exists
 _data = load_data()
+def _fmt_price(price, currency: str) -> str:
+    """'8% of monthly rent' stays as-is; numeric 1800 becomes 'NPR 1,800'."""
+    if isinstance(price, (int, float)):
+        return f"{currency} {price:,.0f}" if float(price).is_integer() else f"{currency} {price:,}"
+    return str(price)
+
 if "products" in _data:
     @mcp.tool()
     def search_products(category: str) -> str:
         """Search inventory by product category.
         """
         data = load_data()
-        categories = list(set(p.get("category", "") for p in data["products"]))
+        currency = data.get("currency", "$")
+        categories = sorted(set(p.get("category", "") for p in data["products"]) - {""})
         matches = [
             p for p in data.get("products", [])
             if p.get("category") == category.lower()
         ]
         if not matches:
             return f"No products found in '{category}'. Available categories: {', '.join(categories)}"
-        lines = "\n".join(f"- {p['name']}: NPR {p['price']:,}" for p in matches)
+        lines = "\n".join(f"- {p['name']}: {_fmt_price(p['price'], currency)}" for p in matches)
         return f"Products in '{category}':\n{lines}"
 
 if "services" in _data:
@@ -41,25 +48,59 @@ if "services" in _data:
     def search_services(category: str) -> str:
         """Search services by category."""
         data = load_data()
-        categories = list(set(s.get("category", "") for s in data["services"]))
+        currency = data.get("currency", "$")
+        categories = sorted(set(s.get("category", "") for s in data["services"]) - {""})
         matches = [
             s for s in data.get("services", [])
             if s.get("category") == category.lower()
         ]
+        # Some verticals (e.g. property management) don't categorize services
+        # at all. Without this, the tool ALWAYS returned "no services found"
+        # with an empty category list. If nothing is categorized, just list
+        # everything.
+        if not matches and not categories:
+            matches = data.get("services", [])
         if not matches:
             return f"No services found in '{category}'. Available categories: {', '.join(categories)}"
-        lines = "\n".join(f"- {s['name']}: ${s['price']} ({s['duration']})" for s in matches)
+        lines = "\n".join(
+            f"- {s['name']}: {_fmt_price(s['price'], currency)}"
+            + (f" ({s['duration']})" if s.get("duration") else "")
+            + (f" — {s['description']}" if s.get("description") else "")
+            for s in matches
+        )
         return f"Services in '{category}':\n{lines}"
 
 if "faq" in _data:
+    # Words that carry no meaning for matching. The old matcher fired if ANY
+    # word of a stored question appeared in the user's question — "do", "you",
+    # "how" match everything, so it returned the FIRST FAQ regardless of what
+    # was actually asked.
+    _STOPWORDS = {
+        "a", "an", "the", "do", "does", "did", "you", "your", "we", "our", "i",
+        "is", "are", "was", "were", "what", "how", "much", "can", "will",
+        "of", "for", "to", "in", "on", "at", "with", "and", "or", "any",
+        "there", "it", "my", "me", "long", "need", "offer", "have", "if",
+    }
+
     @mcp.tool()
     def get_faq(question: str) -> str:
         """Answer common customer questions about the business."""
         data = load_data()
-        question_lower = question.lower()
+        q_words = {
+            w.strip("?.,!") for w in question.lower().split()
+        } - _STOPWORDS
+        best_score, best_answer = 0, None
         for item in data["faq"]:
-            if any(word in question_lower for word in item["q"].lower().split()):
-                return item["a"]
+            item_words = {
+                w.strip("?.,!") for w in item["q"].lower().split()
+            } - _STOPWORDS
+            score = len(q_words & item_words)
+            if score > best_score:
+                best_score, best_answer = score, item["a"]
+        # Require at least one MEANINGFUL overlapping word; otherwise punt
+        # to the contact number instead of guessing.
+        if best_answer and best_score >= 1:
+            return best_answer
         return f"For that question please contact us at {data['contact']}."
     
         

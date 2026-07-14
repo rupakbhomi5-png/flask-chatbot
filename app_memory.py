@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import asyncio
 import threading
@@ -9,7 +10,7 @@ from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from mcp.client.stdio import stdio_client, get_default_environment
 
 load_dotenv(override=True)
 assert os.environ.get("ANTHROPIC_API_KEY"), "Missing ANTHROPIC_API_KEY — set it before starting"
@@ -20,7 +21,9 @@ app = Flask(__name__)
 def redirect_to_https():
     if request.headers.get("X-Forwarded-Proto") == "http":
         url = request.url.replace("http://", "https://", 1)
-        return redirect(url, code=301)
+        # 308, not 301: 301 permits clients to convert POST→GET, which would
+        # silently break /chat for any visitor arriving over http.
+        return redirect(url, code=308)
 
 @app.after_request
 def set_security_headers(response):
@@ -49,13 +52,11 @@ MODEL_NAME = "claude-haiku-4-5-20251001"
 MAX_TOOL_ITERATIONS = 3
 
 # ── Self-test IP allowlist ─────────────────────────────────────────────────────
-# Add every IP you personally test from (home, phone hotspot, etc.). Check
-# "what is my ip" from each connection. This is best-effort, not exact — IPs
-# change, and this won't catch every self-test, but it kills the ambiguity
-# for the common case (testing from your usual home connection).
+# Set MY_IPS as a comma-separated env var on Render (e.g. "1.2.3.4,5.6.7.8").
+# Env var, not hardcoded: no redeploy when your IP changes, and no shipping
+# a placeholder string that silently never matches. Best-effort only.
 MY_KNOWN_IPS = [
-    "REPLACE_WITH_YOUR_HOME_IP",
-    # "REPLACE_WITH_YOUR_PHONE_HOTSPOT_IP",
+    ip.strip() for ip in os.environ.get("MY_IPS", "").split(",") if ip.strip()
 ]
 
 _redis_url = os.environ.get("REDIS_URL")
@@ -65,9 +66,18 @@ if not _redis_url:
 def get_real_ip():
     """Render's proxy makes request.remote_addr always 127.0.0.1 — read the
     real visitor IP from X-Forwarded-For instead, or the limiter treats every
-    visitor as the same client."""
-    ip = request.headers.get("X-Forwarded-For", request.remote_addr)
-    return ip.split(",")[0].strip() if ip else request.remote_addr
+    visitor as the same client.
+
+    SECURITY: use the LAST entry, not the first. The first entries are
+    client-supplied and trivially spoofable (an attacker could mint a fresh
+    fake IP per request and bypass rate limiting entirely, running up the
+    API bill). The last entry is the one appended by Render's own proxy and
+    is the only one you can trust. If you ever put another proxy (e.g.
+    Cloudflare) in front of Render, this must change again."""
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.remote_addr or "127.0.0.1"
 
 limiter = Limiter(
     get_real_ip,
@@ -105,10 +115,18 @@ def sanitize_history(raw) -> list:
 
 # ── Data & system prompt — loaded ONCE at startup ─────────────────────────────
 def load_data() -> dict:
+    # Default MUST match mcp_server.py exactly. They previously defaulted to
+    # different files (pm_data vs business_data) — deploy without DATA_FILE
+    # set and the prompt describes one business while MCP tools serve
+    # another's inventory. Silent, no error, customer-visible.
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    data_file = os.environ.get("DATA_FILE", "pm_data.json")
+    data_file = os.environ.get("DATA_FILE", "business_data.json")
+    if not os.environ.get("DATA_FILE"):
+        print(f"⚠ DATA_FILE not set — defaulting to {data_file}. Set it explicitly in production.")
     with open(os.path.join(base_dir, data_file), "r") as f:
-        return json.load(f)
+        data = json.load(f)
+    print(f"✓ Data loaded: {data_file} → {data.get('store_name', '?')}")
+    return data
 
 def build_system_prompt(data: dict) -> str:
     currency = data.get("currency", "$")
@@ -223,9 +241,20 @@ def send_lead_email(name: str, contact: str, service_interest: str = "", visitor
 
 # ── MCP — persistent worker keeps one subprocess alive ────────────────────────
 def _mcp_params() -> StdioServerParameters:
+    # Two production traps fixed here:
+    # 1. The MCP SDK does NOT inherit the parent environment — it builds a
+    #    minimal safe env (PATH, HOME, ...) unless you pass env explicitly.
+    #    Without this, DATA_FILE never reaches mcp_server.py and the tools
+    #    serve the DEFAULT business's data no matter what the app loaded.
+    # 2. sys.executable, not "python" — some images only ship python3;
+    #    "python" missing on PATH means MCP silently fails at every boot.
     return StdioServerParameters(
-        command="python",
+        command=sys.executable,
         args=[os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_server.py")],
+        env={
+            **get_default_environment(),
+            "DATA_FILE": os.environ.get("DATA_FILE", "business_data.json"),
+        },
     )
 
 _bg_loop = asyncio.new_event_loop()
@@ -290,7 +319,12 @@ def _call_mcp_tool_sync(name: str, args: dict) -> str:
 
 # ── Tool startup ───────────────────────────────────────────────────────────────
 _mcp_available = False
-_MCP_ENABLED = os.environ.get("MCP_ENABLED", "true").lower() == "true"
+# Default OFF. Every product/service/FAQ is already baked into the system
+# prompt at startup, so for these catalog sizes MCP adds a subprocess, a
+# background event loop, and blocking 30s bridges inside request handlers —
+# for answers the prompt already gives. Turn it on (MCP_ENABLED=true) only
+# when a catalog is too large to fit in the prompt.
+_MCP_ENABLED = os.environ.get("MCP_ENABLED", "false").lower() == "true"
 
 if _MCP_ENABLED:
     try:
@@ -343,7 +377,10 @@ def index():
 @app.route("/chat", methods=["POST"])
 @limiter.limit("10 per minute")
 def chat():
-    body = request.json
+    # get_json(silent=True) instead of request.json: wrong/missing
+    # Content-Type otherwise raises 415 and Flask returns an HTML error page
+    # the chat widget can't parse.
+    body = request.get_json(silent=True)
     if not body or not body.get("message"):
         return jsonify({"error": "Message cannot be empty."}), 400
     user_message = body["message"].strip()
@@ -352,12 +389,9 @@ def chat():
     if len(user_message) > 500:
         return jsonify({"error": "Message too long. Please keep it under 500 characters."}), 400
 
-    # Capture the real visitor IP (Render sits behind a proxy, so check
-    # X-Forwarded-For first — it can be a comma-separated list; the first
-    # entry is the original client).
-    visitor_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
-    if visitor_ip:
-        visitor_ip = visitor_ip.split(",")[0].strip()
+    # Same trusted-IP logic as the rate limiter (last XFF entry — the one
+    # Render's proxy appended). Keeps [SELF-TEST] tagging unspoofable too.
+    visitor_ip = get_real_ip()
 
     history = sanitize_history(body.get("history"))
     history.append({"role": "user", "content": user_message})
@@ -371,7 +405,11 @@ def chat():
             for _ in range(MAX_TOOL_ITERATIONS):
                 response = client.messages.create(
                     model=MODEL_NAME,
-                    max_tokens=300,
+                    # 500, not 300: the PM config packs unit/issue/severity/
+                    # entry-permission into service_interest — 300 tokens can
+                    # truncate the tool_use JSON mid-argument (stop_reason
+                    # "max_tokens" → malformed capture).
+                    max_tokens=500,
                     system=SYSTEM_PROMPT,
                     tools=TOOLS,
                     messages=history,
@@ -408,11 +446,16 @@ def chat():
                     break
 
             if used_tools:
+                # History now contains tool_use/tool_result blocks — the API
+                # rejects such requests unless `tools` is defined. Pass tools
+                # but forbid further calls so this is guaranteed a text turn.
                 full_reply: list[str] = []
                 with client.messages.stream(
                     model=MODEL_NAME,
                     max_tokens=300,
                     system=SYSTEM_PROMPT,
+                    tools=TOOLS,
+                    tool_choice={"type": "none"},
                     messages=history,
                 ) as stream:
                     for text in stream.text_stream:
@@ -421,8 +464,12 @@ def chat():
                 final_text = "".join(full_reply)
             else:
                 final_text = "".join(b.text for b in response.content if hasattr(b, "text"))
-                for char in final_text:
-                    yield f"data: {json.dumps({'token': char})}\n\n"
+                # Word chunks, not per-character events — a 2-sentence reply
+                # was previously ~150 SSE events for zero UX gain.
+                words = final_text.split(" ")
+                for i, word in enumerate(words):
+                    token = word if i == len(words) - 1 else word + " "
+                    yield f"data: {json.dumps({'token': token})}\n\n"
 
             client_history.append({"role": "assistant", "content": final_text})
             trimmed = client_history[-MAX_HISTORY_MESSAGES:]
