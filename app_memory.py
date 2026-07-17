@@ -500,6 +500,25 @@ def reset():
     # Stateless server — the browser clears its own history; nothing stored here.
     return jsonify({"message": "Conversation reset."})
 
+# --- VOICE LEAD WEBHOOK (Projects A/B) — dormant unless VOICE_ENABLED=true ---
+@app.route("/voice_lead", methods=["POST"])
+def voice_lead():
+    if os.environ.get("VOICE_ENABLED", "false").lower() != "true":
+        return jsonify({"status": "disabled"}), 404
+    secret = os.environ.get("VOICE_WEBHOOK_SECRET", "")
+    if not secret or request.headers.get("X-Webhook-Secret") != secret:
+        return jsonify({"status": "unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    contact = (data.get("contact") or "").strip()
+    service_interest = (data.get("service_interest") or "").strip()
+    # 0eb5003 guard, voice edition: no real callback contact = no lead email
+    if not name or not contact or contact in ("unknown", "0000000000"):
+        print(f"⚠ VOICE LEAD rejected by guard: {data}")
+        return jsonify({"status": "rejected"}), 200
+    send_lead_email(name, contact, service_interest)
+    return jsonify({"status": "ok"}), 200
+
 @app.errorhandler(429)
 def rate_limit_handler(e):
     return jsonify({"error": "Too many requests. Please slow down."}), 429
