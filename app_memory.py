@@ -395,32 +395,44 @@ _EMBED_LOADER_JS = """(function () {
   var currentScript = document.currentScript;
   var base = currentScript.src.replace(/\\/embed\\.js.*$/, "");
 
-  var iframe = document.createElement("iframe");
-  iframe.src = base + "/?embed=1";
-  iframe.title = "Chat";
-  iframe.setAttribute("allow", "microphone");
-  iframe.style.cssText =
+  var CLOSED_CSS =
     "position:fixed;bottom:20px;right:20px;width:64px;height:64px;" +
     "border:none;border-radius:50%;box-shadow:0 4px 20px rgba(0,0,0,.25);" +
     "z-index:2147483000;background:transparent;" +
     "transition:width .2s ease,height .2s ease,border-radius .2s ease;";
+
+  var iframe = document.createElement("iframe");
+  iframe.src = base + "/?embed=1";
+  iframe.title = "Chat";
+  iframe.setAttribute("allow", "microphone");
+  iframe.style.cssText = CLOSED_CSS;
   document.body.appendChild(iframe);
+
+  var isOpen = false;
 
   window.addEventListener("message", function (e) {
     if (e.source !== iframe.contentWindow) return;
     if (!e.data || e.data.type !== "rupakco-widget-resize") return;
+    isOpen = e.data.state === "open";
     var mobile = window.matchMedia("(max-width: 480px)").matches;
-    if (e.data.state === "open") {
+    if (isOpen) {
       iframe.style.cssText = mobile
         ? "position:fixed;bottom:0;right:0;width:100vw;height:100dvh;border:none;border-radius:0;box-shadow:none;z-index:2147483000;background:transparent;transition:width .2s ease,height .2s ease,border-radius .2s ease;"
         : "position:fixed;bottom:20px;right:20px;width:380px;height:min(640px,80vh);border:none;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.3);z-index:2147483000;background:transparent;transition:width .2s ease,height .2s ease,border-radius .2s ease;";
     } else {
-      iframe.style.cssText =
-        "position:fixed;bottom:20px;right:20px;width:64px;height:64px;" +
-        "border:none;border-radius:50%;box-shadow:0 4px 20px rgba(0,0,0,.25);" +
-        "z-index:2147483000;background:transparent;" +
-        "transition:width .2s ease,height .2s ease,border-radius .2s ease;";
+      iframe.style.cssText = CLOSED_CSS;
     }
+  });
+
+  // Clicking anywhere on the host page outside the iframe collapses the
+  // widget back to the bubble. A click landing inside the iframe never
+  // reaches this listener (it's a separate document), so any mousedown
+  // seen here is, by definition, an outside click — no coordinate math needed.
+  document.addEventListener("mousedown", function () {
+    if (!isOpen) return;
+    isOpen = false;
+    iframe.style.cssText = CLOSED_CSS;
+    iframe.contentWindow.postMessage({ type: "rupakco-widget-collapse" }, "*");
   });
 })();"""
 

@@ -332,6 +332,7 @@
 
         .launcher-bubble {
             display: none;
+            position: relative;
             width: 100%;
             height: 100dvh;
             border: none;
@@ -340,14 +341,48 @@
             justify-content: center;
             background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
             color: #fff;
-            font-size: 28px;
-            box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.25), inset 0 -10px 18px rgba(0,0,0,0.12);
+            animation: bubble-in 0.35s cubic-bezier(.34,1.56,.64,1);
+        }
+        .launcher-bubble svg {
+            width: 26px;
+            height: 26px;
+            position: relative;
+            z-index: 1;
+            animation: icon-breathe 2.6s ease-in-out infinite;
+        }
+        .launcher-bubble .ping-dot {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #FF4D4D;
+            border: 2px solid #fff;
+            animation: ping-pulse 1.8s ease-out 1s 3;
+        }
+        @keyframes bubble-in {
+            from { transform: scale(0.6); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        @keyframes icon-breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+        @keyframes ping-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(255,77,77,0.55); }
+            70% { box-shadow: 0 0 0 5px rgba(255,77,77,0); }
+            100% { box-shadow: 0 0 0 0 rgba(255,77,77,0); }
         }
         .close-widget-btn { display: none; }
     </style>
 </head>
 <body>
-<button class="launcher-bubble" id="launcher-bubble" onclick="openWidget()" title="Open chat">❄️</button>
+<button class="launcher-bubble" id="launcher-bubble" onclick="openWidget()" title="Open chat">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+    <span class="ping-dot" id="ping-dot"></span>
+</button>
 <div class="chat-container">
 
     <div class="chat-header">
@@ -401,6 +436,8 @@
         document.querySelector(".chat-container").style.display = "flex";
         document.getElementById("launcher-bubble").style.display = "none";
         document.getElementById("close-widget-btn").style.display = "flex";
+        const pingDot = document.getElementById("ping-dot");
+        if (pingDot) pingDot.remove();
         postToParent("open");
         document.getElementById("user-input").focus();
     }
@@ -416,6 +453,13 @@
         document.querySelector(".chat-container").style.display = "none";
         document.getElementById("launcher-bubble").style.display = "flex";
     }
+
+    // Clicking outside the widget (on the client's own page) collapses it
+    // back to the bubble, same as pressing the X. The parent frame (embed.js)
+    // detects the outside click and relays this message in.
+    window.addEventListener("message", function (e) {
+        if (e.data && e.data.type === "rupakco-widget-collapse") closeWidget();
+    });
 
     const GREETING_TEXT = "Hey there! 👋 I'm " + BOT_NAME + ", your HVAC assistant. What can I help you with today?";
     const QUICK_REPLIES = [
