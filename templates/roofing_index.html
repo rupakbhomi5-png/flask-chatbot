@@ -160,7 +160,7 @@
         }
 
         .assistant {
-            background: #ffffff;
+            background: var(--surface);
             color: var(--text);
             align-self: flex-start;
             border-bottom-left-radius: 4px;
@@ -185,7 +185,7 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            background: #fff;
+            background: var(--surface);
             flex-shrink: 0;
         }
 
@@ -204,7 +204,7 @@
 
         #user-input:focus {
             border-color: var(--brand);
-            background: #fff;
+            background: var(--surface);
         }
 
         #user-input::placeholder { color: #9CA3AF; }
@@ -248,6 +248,88 @@
             0%, 100% { transform: scale(1); }
             50% { transform: scale(1.1); }
         }
+
+        /* Dark mode — toggled via [data-theme] on <html>, defaults to system preference */
+        :root[data-theme="dark"] {
+            --bg: #10131a;
+            --surface: #1a1e28;
+            --text: #E8EAF0;
+            --text-soft: #8B93A3;
+            --border: #2C313F;
+            --header-bg: #0A0C11;
+            --header-bg2: #14171F;
+        }
+        :root[data-theme="dark"] .welcome {
+            background: rgba(255,255,255,0.05);
+            border-bottom-color: var(--border);
+            color: var(--text-soft);
+        }
+        :root[data-theme="dark"] .assistant {
+            box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+        }
+        :root[data-theme="dark"] .qr-btn {
+            background: var(--surface);
+            border-color: var(--border);
+            color: var(--text);
+        }
+        :root[data-theme="dark"] .qr-btn:hover {
+            border-color: var(--brand);
+            background: rgba(255,255,255,0.04);
+        }
+
+        .header-right { display: flex; align-items: center; gap: 8px; }
+
+        .theme-btn {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #fff;
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            transition: background 0.15s;
+        }
+        .theme-btn:hover { background: rgba(255,255,255,0.2); }
+
+        /* Quick-reply chips shown with the greeting so the chat never opens on a blank box */
+        .quick-replies {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 2px 2px 4px;
+        }
+        .qr-btn {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+            text-align: left;
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 11px 14px;
+            font-size: 13.5px;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.15s;
+        }
+        .qr-btn::after {
+            content: "→";
+            color: var(--brand);
+            font-weight: 700;
+            margin-left: 10px;
+            flex-shrink: 0;
+            transition: transform 0.15s;
+        }
+        .qr-btn:hover { border-color: var(--brand); background: var(--brand-light); }
+        .qr-btn:hover::after { transform: translateX(2px); }
     </style>
 </head>
 <body>
@@ -261,7 +343,10 @@
                 <p><span class="online-dot"></span>Get a free estimate anytime</p>
             </div>
         </div>
-        <button class="reset-btn" onclick="resetChat()">New chat</button>
+        <div class="header-right">
+            <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" title="Toggle dark mode">🌙</button>
+            <button class="reset-btn" onclick="resetChat()">New chat</button>
+        </div>
     </div>
 
     <div class="welcome">
@@ -284,6 +369,28 @@
 </div>
 <script>
     const BOT_NAME = "{{ bot_name }}";
+
+    const GREETING_TEXT = "Hey there! 👋 I'm " + BOT_NAME + ", here to help with your roof. What can I help you with today?";
+    const QUICK_REPLIES = [
+        { label: "🔨 Free estimate", msg: "I'd like a free roofing estimate" },
+        { label: "⛈️ Storm damage", msg: "I have storm damage I need help with" },
+        { label: "💬 General question", msg: "I have a general question" }
+    ];
+
+    // Theme: explicit choice in localStorage wins, otherwise follow system preference.
+    (function initTheme() {
+        const saved = localStorage.getItem("theme");
+        const theme = saved || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+    })();
+
+    function toggleTheme() {
+        const next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        localStorage.setItem("theme", next);
+        document.getElementById("theme-btn").textContent = next === "dark" ? "☀️" : "🌙";
+    }
+    document.getElementById("theme-btn").textContent = document.documentElement.getAttribute("data-theme") === "dark" ? "☀️" : "🌙";
 
     // Conversation history lives in sessionStorage so it survives a page
     // refresh (F5) within the same tab, but never leaks between different
@@ -322,7 +429,35 @@
             }
         }
     }
-    renderStoredHistory();
+
+    // First visit (or right after a reset) the chat box is empty — show a
+    // greeting bubble with quick-reply chips instead of a blank panel.
+    function showGreeting() {
+        appendMessage(BOT_NAME, GREETING_TEXT, "assistant");
+        const box = document.getElementById("chat-box");
+        const chips = document.createElement("div");
+        chips.className = "quick-replies";
+        chips.id = "quick-replies";
+        QUICK_REPLIES.forEach(qr => {
+            const btn = document.createElement("button");
+            btn.className = "qr-btn";
+            btn.type = "button";
+            btn.textContent = qr.label;
+            btn.addEventListener("click", () => {
+                document.getElementById("user-input").value = qr.msg;
+                chips.remove();
+                sendMessage();
+            });
+            chips.appendChild(btn);
+        });
+        box.appendChild(chips);
+    }
+
+    if (conversationHistory.length > 0) {
+        renderStoredHistory();
+    } else {
+        showGreeting();
+    }
 
     async function sendMessage() {
         const input = document.getElementById("user-input");
@@ -389,6 +524,7 @@
         sessionStorage.removeItem("conversationHistory");
         await fetch("/reset", { method: "POST" });
         document.getElementById("chat-box").innerHTML = "";
+        showGreeting();
     }
 
     document.getElementById("user-input").addEventListener("keypress", function(e) {
