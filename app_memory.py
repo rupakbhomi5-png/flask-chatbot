@@ -30,18 +30,28 @@ def set_security_headers(response):
     # Templates use inline <script>/<style> (no external JS/CSS files) and
     # one external favicon from fav.farm — CSP below matches that as-is.
     # Revisit if templates move to external assets or nonces.
+    #
+    # EMBED WIDGET EXCEPTION: "/" with ?embed=1 is the iframe the /embed.js
+    # loader creates so a client can embed the chatbot on their own site.
+    # That specific response needs to be frameable from any third-party
+    # domain (the client's site is never known in advance) — every other
+    # response keeps the locked-down default. Scoped narrowly on purpose,
+    # per CSP FAILSAFE's "only per specific domain/feature when built" rule.
+    is_embed_iframe = request.path == "/" and request.args.get("embed") == "1"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    if not is_embed_iframe:
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    frame_ancestors = "frame-ancestors *; " if is_embed_iframe else "frame-ancestors 'none'; "
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' https://fav.farm data:; "
         "connect-src 'self'; "
-        "frame-ancestors 'none'; "
+        f"{frame_ancestors}"
         "base-uri 'self'; "
         "form-action 'self'"
     )
@@ -373,6 +383,50 @@ def run_tool(tool_name: str, tool_input: dict, visitor_ip: str = "") -> str:
 def index():
     template = os.environ.get("TEMPLATE_FILE", "index.html")
     return render_template(template, bot_name=DATA["bot_name"], store_name=DATA["store_name"])
+
+# EMBEDDABLE WIDGET LOADER — a client pastes <script src=".../embed.js"></script>
+# on their own site. This creates a small floating iframe pointing back at "/"
+# with ?embed=1 (which the templates render as a bubble-then-panel widget
+# instead of a full page) and resizes that iframe via postMessage. No CORS
+# needed: the iframe's own /chat and /reset calls stay same-origin with it —
+# only the outer <script> tag and the postMessage bridge cross into the
+# client's page at all.
+_EMBED_LOADER_JS = """(function () {
+  var currentScript = document.currentScript;
+  var base = currentScript.src.replace(/\\/embed\\.js.*$/, "");
+
+  var iframe = document.createElement("iframe");
+  iframe.src = base + "/?embed=1";
+  iframe.title = "Chat";
+  iframe.setAttribute("allow", "microphone");
+  iframe.style.cssText =
+    "position:fixed;bottom:20px;right:20px;width:64px;height:64px;" +
+    "border:none;border-radius:50%;box-shadow:0 4px 20px rgba(0,0,0,.25);" +
+    "z-index:2147483000;background:transparent;" +
+    "transition:width .2s ease,height .2s ease,border-radius .2s ease;";
+  document.body.appendChild(iframe);
+
+  window.addEventListener("message", function (e) {
+    if (e.source !== iframe.contentWindow) return;
+    if (!e.data || e.data.type !== "rupakco-widget-resize") return;
+    var mobile = window.matchMedia("(max-width: 480px)").matches;
+    if (e.data.state === "open") {
+      iframe.style.cssText = mobile
+        ? "position:fixed;bottom:0;right:0;width:100vw;height:100dvh;border:none;border-radius:0;box-shadow:none;z-index:2147483000;background:transparent;transition:width .2s ease,height .2s ease,border-radius .2s ease;"
+        : "position:fixed;bottom:20px;right:20px;width:380px;height:min(640px,80vh);border:none;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.3);z-index:2147483000;background:transparent;transition:width .2s ease,height .2s ease,border-radius .2s ease;";
+    } else {
+      iframe.style.cssText =
+        "position:fixed;bottom:20px;right:20px;width:64px;height:64px;" +
+        "border:none;border-radius:50%;box-shadow:0 4px 20px rgba(0,0,0,.25);" +
+        "z-index:2147483000;background:transparent;" +
+        "transition:width .2s ease,height .2s ease,border-radius .2s ease;";
+    }
+  });
+})();"""
+
+@app.route("/embed.js")
+def embed_js():
+    return Response(_EMBED_LOADER_JS, mimetype="application/javascript")
 
 @app.route("/chat", methods=["POST"])
 @limiter.limit("10 per minute")
