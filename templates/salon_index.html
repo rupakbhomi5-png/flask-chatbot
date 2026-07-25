@@ -370,6 +370,16 @@
             100% { box-shadow: 0 0 0 0 rgba(255,77,77,0); }
         }
         .close-widget-btn { display: none; }
+
+        .dev-credit {
+            text-align: center;
+            font-size: 11px;
+            color: var(--text-soft);
+            padding: 7px 12px;
+            border-top: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .dev-credit a { color: var(--text-soft); }
     </style>
 </head>
 <body>
@@ -411,6 +421,8 @@
         </button>
     </div>
 
+    <div class="dev-credit" id="dev-credit">Built by Rupak. Need a custom AI chatbot like this? <a href="mailto:rupak@rupakco.com">rupak@rupakco.com</a></div>
+
 </div>
 <script>
     const BOT_NAME = "{{ bot_name }}";
@@ -446,6 +458,7 @@
     if (IS_EMBED) {
         document.querySelector(".chat-container").style.display = "none";
         document.getElementById("launcher-bubble").style.display = "flex";
+        document.getElementById("dev-credit").style.display = "none";
     }
 
     // Clicking outside the widget (on the client's own page) collapses it
