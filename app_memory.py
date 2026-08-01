@@ -365,9 +365,24 @@ else:
 # on, or both on for the same client.
 _RAG_ENABLED = os.environ.get("RAG_ENABLED", "false").lower() == "true"
 _RAG_CLIENT_SLUG = os.environ.get("DATA_FILE", "business_data.json").removesuffix("_data.json").lower()
+_RAG_SEED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rag_seed_docs")
 if _RAG_ENABLED:
     import rag_store
-    print(f"✓ RAG enabled for client slug '{_RAG_CLIENT_SLUG}' — run ingest_doc.py first if no collection exists yet.")
+    # Render's free/Starter disk is ephemeral — rag_db/ does not survive a
+    # redeploy or restart, so the ingested collection must be rebuilt on every
+    # boot rather than assumed to still be there. Auto-ingest a bundled seed
+    # doc (checked into the repo, unlike rag_db/) whenever this client's
+    # collection is missing, so RAG_ENABLED=true is self-sufficient without
+    # needing Render shell access to run ingest_doc.py by hand after a deploy.
+    if not rag_store.has_collection(_RAG_CLIENT_SLUG):
+        _seed_path = os.path.join(_RAG_SEED_DIR, f"{_RAG_CLIENT_SLUG}.txt")
+        if os.path.exists(_seed_path):
+            with open(_seed_path, "r", encoding="utf-8") as _f:
+                _n = rag_store.ingest_document(_RAG_CLIENT_SLUG, _f.read(), source_name=_seed_path)
+            print(f"✓ RAG auto-ingested {_n} chunks for '{_RAG_CLIENT_SLUG}' from bundled seed doc ({_seed_path})")
+        else:
+            print(f"⚠ RAG enabled for '{_RAG_CLIENT_SLUG}' but no collection and no seed doc at {_seed_path} — retrieval will return empty until one is ingested")
+    print(f"✓ RAG enabled for client slug '{_RAG_CLIENT_SLUG}'")
 
 def build_rag_context(user_message: str) -> str:
     """Empty string if RAG is off or the client has no ingested document yet

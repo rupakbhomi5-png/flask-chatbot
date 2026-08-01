@@ -1,0 +1,86 @@
+Summit Roofing Co. — Customer Policies and FAQ (DEMO DOCUMENT)
+
+This is a placeholder document for the roofing.rupakco.com product demo. It
+is not a real client's content. It exists to show a prospective subcontract
+client how the RAG feature answers questions from a long policy document
+instead of only the short structured business_data.json. Replace this file
+entirely with a real client's own document before this demo is ever
+presented as anything but a demo.
+
+Workmanship and Warranty Policy
+
+All roof replacements include a 5-year labor warranty covering installation
+defects, separate from the shingle manufacturer's own material warranty.
+Architectural shingle lines we install typically carry a 30-year limited
+manufacturer warranty against manufacturing defects; the exact term depends
+on the shingle line the homeowner selects during the estimate. The labor
+warranty does not cover damage from severe weather events, tree strikes, or
+work performed by another contractor after our install. A written warranty
+copy is provided at project completion, not just quoted verbally.
+
+Emergency and Storm Response
+
+For active leaks or storm damage, same-day tarping is offered when a crew is
+available in the area, typically within 4 to 8 hours of the call during
+business hours. Emergency tarp service carries a flat 150 dollar dispatch
+fee, which is credited back toward the final repair invoice if the customer
+proceeds with the full repair through us. After-hours emergency calls
+outside 7am to 7pm carry an additional 75 dollar after-hours fee on top of
+the standard dispatch fee. Tarping is a temporary measure only; a full
+inspection and repair estimate follows within 2 business days.
+
+Financing Options
+
+Roof replacements can be financed over 12, 24, or 60 months through our
+third-party financing partner, subject to credit approval. The 12-month
+plan carries no interest if paid in full within the term. Estimates are
+always free regardless of whether financing is used. A financing pre-
+qualification does not affect credit score and takes about 2 minutes to
+complete on the estimate call or in person.
+
+Service Area and Response Time
+
+We currently serve a roughly 40-mile radius around the metro area. Standard
+estimate requests are scheduled within 3 business days of the initial
+inquiry. Storm-damage estimate requests are prioritized and typically
+scheduled within 24 to 48 hours when a named storm or hail event has hit the
+area. Requests from outside the standard service radius are still logged
+and offered a callback, but a site visit may take longer to schedule or may
+require a small travel fee, confirmed before any visit is booked.
+
+Roof Inspection Process
+
+A standard inspection covers shingle condition, flashing around chimneys
+and vents, gutter attachment points, and attic ventilation from the inside
+when accessible. Inspections take 30 to 45 minutes on a typical single-story
+home. Photos are taken throughout and included in the written estimate. A
+free inspection does not obligate the homeowner to book work; there is no
+high-pressure follow-up beyond one scheduled check-in call about a week
+after the estimate is sent.
+
+Insurance Claim Assistance
+
+When roof damage is likely storm-related, we can meet the homeowner's
+insurance adjuster on-site at no extra charge and provide our own written
+damage assessment to support the claim. We do not file the claim on the
+homeowner's behalf and do not guarantee any claim will be approved — that
+decision is the insurance company's alone. We are not a public adjuster and
+do not charge a percentage of the claim payout; our pricing is the same
+whether a job is insurance-funded or paid directly.
+
+Material Options
+
+Standard three-tab shingles, architectural (dimensional) shingles, and
+metal standing-seam roofing are all offered. Architectural shingles are the
+most commonly chosen option and what our standard estimate defaults to
+unless the homeowner asks about metal or a premium designer shingle line.
+Color and style samples are shown during the in-person estimate; a full
+manufacturer sample book is also available on request.
+
+Satisfaction Policy
+
+If a homeowner is not satisfied with completed work, we return at no charge
+within 30 days of project completion to address workmanship concerns
+covered under the labor warranty above. This does not cover changes of mind
+about material or color selected before installation — those are confirmed
+with the homeowner in writing before any material is ordered.

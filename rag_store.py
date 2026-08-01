@@ -39,6 +39,13 @@ def _collection(client_slug: str):
     return _client.get_or_create_collection(name=client_slug)
 
 
+def has_collection(client_slug: str) -> bool:
+    """Whether client_slug already has an ingested collection on disk. Render's
+    free/Starter filesystem is ephemeral across deploys and restarts, so this
+    is checked fresh on every boot rather than assumed persistent."""
+    return client_slug in {c.name for c in _client.list_collections()}
+
+
 def chunk_text(text: str, max_words: int = 150) -> list[str]:
     """Paragraph-aware chunking: split on blank lines, then hard-wrap any
     paragraph longer than max_words. Good enough for policy docs and FAQs;
@@ -65,8 +72,7 @@ def ingest_document(client_slug: str, text: str, source_name: str = "document") 
     chunks = chunk_text(text)
     if not chunks:
         return 0
-    existing = {c.name for c in _client.list_collections()}
-    if client_slug in existing:
+    if has_collection(client_slug):
         _client.delete_collection(name=client_slug)
     col = _collection(client_slug)
     embeddings = list(_get_embedder().embed(chunks))
@@ -83,8 +89,7 @@ def retrieve(client_slug: str, query: str, k: int = 4) -> list[str]:
     """Top-k closest chunks for this query. Empty list if the client has no
     ingested collection yet — callers must treat that as "no RAG context
     available" and fall back to business_data.json alone, not as an error."""
-    existing = {c.name for c in _client.list_collections()}
-    if client_slug not in existing:
+    if not has_collection(client_slug):
         return []
     col = _collection(client_slug)
     query_embedding = list(_get_embedder().embed([query]))[0].tolist()

@@ -77,6 +77,15 @@ LLM as grounding). Five moving parts, no more.
   and all. Don't point it at data you know is unconfirmed/placeholder —
   fix the source data first, RAG doesn't launder bad input into good
   output.
+- **Retrieval is scoped per collection, and only per collection.** Keying
+  every collection by `client_slug` isn't just organizational — it's the
+  entire isolation boundary. A roofing client's bot can only ever retrieve
+  from the `"roofing"` collection; it has no path to any other client's
+  data, your own business's data, or anything outside whatever document you
+  explicitly ran `ingest_doc.py` on for that slug. If a bot ever says
+  something it shouldn't have access to, the cause is a data-entry mistake
+  (ingested the wrong file under that slug), not a leak in the retrieval
+  logic itself.
 
 ---
 
@@ -113,14 +122,40 @@ length) — all three retrieved the correct source chunk despite no literal
 word overlap with the question. Test collection deleted after — nothing
 fake left in `rag_db/`.
 
+**Deployed 2026-08-01, commit `5734d69`, pushed with explicit go-ahead.**
+Confirmed live on both actual Render services ("Rupak-chatbot" and
+"Roofing-demo" — there are only 2, not 6, see STATE.md correction),
+clean build, no failures. `RAG_ENABLED` is unset on both — still a no-op
+in production.
+
+**Pilot round 2, 2026-08-01: auto-ingest-at-startup added.** Gap closed:
+Render's free/Starter disk is ephemeral, so anything `ingest_doc.py` wrote
+to local `rag_db/` would vanish on the next redeploy or restart, and
+there's no Render shell access in this workflow to re-run it by hand every
+time. Fix — `rag_seed_docs/<client_slug>.txt` is a checked-in (not
+gitignored) directory of seed documents. On boot, if `RAG_ENABLED=true`
+and `rag_store.has_collection(slug)` is false, `app_memory.py` auto-ingests
+`rag_seed_docs/<slug>.txt` if it exists, so the collection self-heals on
+every cold start with zero manual steps after a deploy. `ingest_doc.py`
+still exists for onboarding a real client's document by hand later — the
+two paths aren't mutually exclusive, auto-ingest is just the bootstrap for
+whatever's already checked in.
+
+`rag_seed_docs/roofing.txt` is the pilot's seed doc — a realistic but
+explicitly fictional roofing company policy doc (warranty, emergency/storm
+response, financing, service area, insurance-claim assistance, materials,
+satisfaction policy), labeled as a demo document in its own header since
+no real roofing client exists yet. Tested locally: auto-ingest ran end to
+end (18 chunks), 3 paraphrased questions (after-hours call fee, financing,
+storm insurance help) all retrieved the correct source chunk. Test
+collection deleted after, same as round 1.
+
 **Not done yet / deliberately stopped short:**
-- Not wired to any real client — this is the pipeline, not a pilot. Next
-  step per the standing plan: pick one demo vertical, feed it a real (not
-  placeholder) long document, turn `RAG_ENABLED=true` on for that one
-  deployment, verify it live.
-- Not deployed — nothing pushed to `origin/main`, nothing on Render. Local
-  build and test only. A push needs explicit go-ahead per the project's
-  standing rule (one push deploys all 6 verticals at once).
+- Not wired to any real client — the pipeline and the auto-ingest bootstrap
+  are both live, but `rag_seed_docs/roofing.txt` is a demo document, not a
+  real client's content. Swap that file for a real client's document
+  (`ingest_doc.py` still works for a one-off manual ingest too) whenever
+  one exists.
 - No PDF ingestion — text/markdown only. Add a PDF-to-text step separately
   if a real client's document only exists as a PDF.
 - Chunking is naive (paragraph + word-count only). Fine for the tested
