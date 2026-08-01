@@ -17,7 +17,9 @@ importing this module costs nothing until ingest_document() or retrieve()
 is actually called, and the embedding model only loads on first use.
 """
 import os
+import sys
 import threading
+import faulthandler
 import chromadb
 from chromadb.config import Settings
 
@@ -125,10 +127,26 @@ def retrieve(client_slug: str, query: str, k: int = 4) -> list[str]:
     """Top-k closest chunks for this query. Empty list if the client has no
     ingested collection yet — callers must treat that as "no RAG context
     available" and fall back to business_data.json alone, not as an error."""
-    if not has_collection(client_slug):
-        return []
-    col = _collection(client_slug)
-    query_embedding = list(_get_embedder().embed([query]))[0].tolist()
-    results = col.query(query_embeddings=[query_embedding], n_results=k)
-    docs = results.get("documents")
-    return docs[0] if docs else []
+    _tag = f"[retrieve tid={threading.get_ident()}]"
+    print(f"{_tag} start", flush=True)
+    # Thread-local client fixed the FIRST confirmed hang (list_collections
+    # from has_collection) but the live symptom persisted after that fix
+    # deployed — so something else in this call is also blocking. Keep the
+    # stack dump armed until every step here is confirmed fast live, not
+    # just locally.
+    faulthandler.dump_traceback_later(15, exit=False, file=sys.stderr)
+    try:
+        if not has_collection(client_slug):
+            print(f"{_tag} no collection", flush=True)
+            return []
+        print(f"{_tag} has_collection ok", flush=True)
+        col = _collection(client_slug)
+        print(f"{_tag} got collection handle", flush=True)
+        query_embedding = list(_get_embedder().embed([query]))[0].tolist()
+        print(f"{_tag} embedded query", flush=True)
+        results = col.query(query_embeddings=[query_embedding], n_results=k)
+        print(f"{_tag} col.query done", flush=True)
+        docs = results.get("documents")
+        return docs[0] if docs else []
+    finally:
+        faulthandler.cancel_dump_traceback_later()
