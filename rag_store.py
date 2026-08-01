@@ -17,6 +17,8 @@ importing this module costs nothing until ingest_document() or retrieve()
 is actually called, and the embedding model only loads on first use.
 """
 import os
+import time
+import threading
 import chromadb
 from chromadb.config import Settings
 
@@ -51,8 +53,10 @@ def _get_embedder():
     separate spinning worker pool to starve."""
     global _embedder
     if _embedder is None:
+        print(f"[_get_embedder tid={threading.get_ident()}] loading model (cold)", flush=True)
         from fastembed import TextEmbedding
         _embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", threads=1)
+        print(f"[_get_embedder tid={threading.get_ident()}] model loaded", flush=True)
     return _embedder
 
 
@@ -110,10 +114,20 @@ def retrieve(client_slug: str, query: str, k: int = 4) -> list[str]:
     """Top-k closest chunks for this query. Empty list if the client has no
     ingested collection yet — callers must treat that as "no RAG context
     available" and fall back to business_data.json alone, not as an error."""
+    _tag = f"[retrieve tid={threading.get_ident()}]"
+    _t0 = time.monotonic()
+    print(f"{_tag} start", flush=True)
     if not has_collection(client_slug):
+        print(f"{_tag} no collection, {time.monotonic() - _t0:.2f}s", flush=True)
         return []
+    print(f"{_tag} has_collection ok, {time.monotonic() - _t0:.2f}s", flush=True)
     col = _collection(client_slug)
-    query_embedding = list(_get_embedder().embed([query]))[0].tolist()
+    print(f"{_tag} got collection handle, {time.monotonic() - _t0:.2f}s", flush=True)
+    embedder = _get_embedder()
+    print(f"{_tag} got embedder, {time.monotonic() - _t0:.2f}s", flush=True)
+    query_embedding = list(embedder.embed([query]))[0].tolist()
+    print(f"{_tag} embedded query, {time.monotonic() - _t0:.2f}s", flush=True)
     results = col.query(query_embeddings=[query_embedding], n_results=k)
+    print(f"{_tag} col.query done, {time.monotonic() - _t0:.2f}s", flush=True)
     docs = results.get("documents")
     return docs[0] if docs else []
