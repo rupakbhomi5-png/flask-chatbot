@@ -356,6 +356,39 @@ else:
     TOOLS = [LEAD_CAPTURE_TOOL]
     print("⚠ MCP_ENABLED=false — products/services/FAQ answered from system prompt, lead capture active.")
 
+# ── RAG (retrieval-augmented generation) — default OFF ────────────────────────
+# For a client whose real content doesn't fit in business_data.json (a policy
+# doc, a long FAQ, a service catalog longer than a prompt should carry) —
+# different problem from MCP_ENABLED above, which is for large STRUCTURED
+# catalogs answered via tool calls. RAG is for long-form/unstructured text
+# answered via semantic retrieval. Independent flags, can both be off, either
+# on, or both on for the same client.
+_RAG_ENABLED = os.environ.get("RAG_ENABLED", "false").lower() == "true"
+_RAG_CLIENT_SLUG = os.environ.get("DATA_FILE", "business_data.json").removesuffix("_data.json").lower()
+if _RAG_ENABLED:
+    import rag_store
+    print(f"✓ RAG enabled for client slug '{_RAG_CLIENT_SLUG}' — run ingest_doc.py first if no collection exists yet.")
+
+def build_rag_context(user_message: str) -> str:
+    """Empty string if RAG is off or the client has no ingested document yet
+    — callers append this directly to SYSTEM_PROMPT, so it must be safe to
+    be blank rather than something the prompt template has to branch on."""
+    if not _RAG_ENABLED:
+        return ""
+    try:
+        chunks = rag_store.retrieve(_RAG_CLIENT_SLUG, user_message)
+    except Exception as e:
+        print(f"⚠ RAG retrieval failed ({e}) — falling back to business_data.json only")
+        return ""
+    if not chunks:
+        return ""
+    excerpts = "\n\n".join(f"- {c}" for c in chunks)
+    return (
+        "\n\nRELEVANT DOCUMENT EXCERPTS (from the client's own document, "
+        "retrieved for this specific question — treat as authoritative, "
+        f"same as the business info above):\n{excerpts}"
+    )
+
 def run_tool(tool_name: str, tool_input: dict, visitor_ip: str = "") -> str:
     if tool_name == "capture_lead":
         return send_lead_email(
@@ -463,6 +496,13 @@ def chat():
     history.append({"role": "user", "content": user_message})
     client_history = list(history)  # text-only view returned to the browser
 
+    # Retrieval happens once per request, on the raw visitor message — not
+    # inside the tool loop below, since the question doesn't change across
+    # tool_use iterations and re-embedding on every loop pass would be wasted
+    # work. Empty string (RAG off, or nothing relevant found) leaves
+    # SYSTEM_PROMPT byte-for-byte what it was before this feature existed.
+    request_system_prompt = SYSTEM_PROMPT + build_rag_context(user_message)
+
     def generate():
         nonlocal history
         try:
@@ -476,7 +516,7 @@ def chat():
                     # truncate the tool_use JSON mid-argument (stop_reason
                     # "max_tokens" → malformed capture).
                     max_tokens=500,
-                    system=SYSTEM_PROMPT,
+                    system=request_system_prompt,
                     tools=TOOLS,
                     messages=history,
                 )
@@ -519,7 +559,7 @@ def chat():
                 with client.messages.stream(
                     model=MODEL_NAME,
                     max_tokens=300,
-                    system=SYSTEM_PROMPT,
+                    system=request_system_prompt,
                     tools=TOOLS,
                     tool_choice={"type": "none"},
                     messages=history,
