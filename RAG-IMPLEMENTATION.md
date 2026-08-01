@@ -31,11 +31,18 @@ LLM as grounding). Five moving parts, no more.
    host. `fastembed` (quantized ONNX models, ~100-150MB, no GPU, no torch)
    is the lighter default for anything deploy-size-constrained. Both are
    free and run locally — no API key, no per-call cost, no new vendor.
-2. **Pick a local vector store.** `chromadb` running embedded/persistent
-   (no separate server process, just a folder on disk) is the free default.
-   Only reach for a hosted vector DB (Pinecone, etc.) once you have a real
-   scale or multi-server reason to — it's a new bill and a new dependency
-   for something a folder on disk already does at this size.
+2. **Count your chunks before you pick a vector store — you probably don't
+   need one.** This is the single most expensive lesson from this build.
+   A vector *database* (chromadb, and its peers) brings a native/Rust
+   extension, a tenant/collection layer, background threads and a ~23MB
+   wheel. Below roughly 10,000 chunks, all of that buys you nothing that
+   `numpy` doesn't already do in five lines: store `{"chunks": [...],
+   "embeddings": [[...]]}` as JSON, load it, and rank by cosine similarity
+   (`(vectors @ query) / (norms * query_norm)`). numpy already ships as a
+   `fastembed` dependency, so this adds **zero** new packages. Reach for an
+   actual vector DB only when a linear scan is measurably too slow —
+   realistically north of ~50,000 chunks. This project stores 18.
+   See "the chromadb incident" in Part 2 for what ignoring this cost.
 3. **Write a chunker.** Paragraph-aware splitting (blank-line boundaries),
    hard-wrap anything longer than ~150 words. Good enough for policy docs
    and FAQs. Revisit only if your source documents don't have paragraph
@@ -86,20 +93,22 @@ LLM as grounding). Five moving parts, no more.
   something it shouldn't have access to, the cause is a data-entry mistake
   (ingested the wrong file under that slug), not a leak in the retrieval
   logic itself.
-- **Always disable chromadb's telemetry.** `chromadb.PersistentClient(...)`
-  defaults `anonymized_telemetry=True`, which spins up a background posthog
-  thread on client init. On a CPU/memory-constrained host (this app's Render
-  Starter instance: 0.5 vCPU, 512MB) that thread caused a full crash loop —
-  gunicorn's own heartbeat starved with **zero incoming HTTP traffic**,
-  `WORKER TIMEOUT` → `SIGKILL` → new worker → same crash again roughly every
-  3 minutes. Looked exactly like a slow-request problem at first (the first
-  symptom was a timed-out `/chat` call) but the real tell was worker deaths
-  with no request in the log between them. Fix: pass
-  `settings=Settings(anonymized_telemetry=False)` to the client
-  unconditionally, every time, on every future project that uses chromadb.
-  Verified locally after the fix: a full ingest+retrieve cycle left the
-  process at exactly 1 thread (main only) — before the fix this is where
-  the extra background thread would show up.
+- **When a deployed hang can't be reproduced locally, get a real stack
+  trace before changing any more code.** `faulthandler.dump_traceback_later(
+  15, exit=False, file=sys.stderr)` at the top of the suspect function,
+  cancelled in a `finally`, prints every thread's actual C/Python stack to
+  the logs if the call doesn't finish in time. Two of those dumps ended a
+  debugging session that four "plausible fix, redeploy, still broken"
+  cycles had not. Timing prints tell you *that* something is slow; the
+  stack tells you *where* it is stopped. Reach for it on hang #1, not
+  hang #4 — every guess-and-redeploy round costs a deploy and, if the
+  service is customer-facing, real downtime.
+- **A hang is not a slowdown, and the difference tells you where to look.**
+  Slow-and-finishes points at CPU/throttling/network. Never-returns points
+  at a lock, a native extension, or a threading-model mismatch — no amount
+  of raising timeouts or trimming thread counts will fix it. Check whether
+  the call *ever* completes given unlimited time before theorizing about
+  performance.
 - **Confirm Render's actual Start Command matches the Procfile before
   blaming application code for timeouts.** Render only reads `Procfile` when
   the service's Settings → Start Command field is empty. If a Start Command
@@ -119,17 +128,20 @@ LLM as grounding). Five moving parts, no more.
 
 **Files added:**
 - `rag_store.py` — `chunk_text()`, `ingest_document()`, `retrieve()`. Uses
-  `fastembed` (`BAAI/bge-small-en-v1.5`, lazy-loaded) + `chromadb`
-  (persistent, local, folder: `rag_db/` — gitignored).
+  `fastembed` (`BAAI/bge-small-en-v1.5`, lazy-loaded) for embeddings and a
+  plain JSON file per client in `rag_db/` (gitignored) for storage, ranked
+  with `numpy` cosine similarity. **No vector database** — chromadb was
+  tried first and removed, see "the chromadb incident" below.
 - `ingest_doc.py` — CLI onboarding script:
   `python ingest_doc.py <client_slug> <path_to_doc.txt>`. Plain text/
   markdown only, no PDF parsing yet.
 
 **Files changed:**
-- `requirements.txt` — added `fastembed`, `chromadb`. (File is UTF-16 LE
-  with CRLF line endings, unusual but pre-existing — edited with
-  PowerShell `Add-Content -Encoding Unicode` to match, not plain
-  UTF-8 append, which would have produced a mixed-encoding file.)
+- `requirements.txt` — added `fastembed` only. (File is UTF-16 LE
+  with CRLF line endings, unusual but pre-existing — read/rewrite it via
+  Python with explicit `utf-16` encoding, not a plain UTF-8 append, which
+  would produce a mixed-encoding file. `numpy` needs no entry; it already
+  arrives as a fastembed dependency.)
 - `app_memory.py` — added `RAG_ENABLED` env var (default `false`, same
   pattern as the existing `MCP_ENABLED` flag) and `_RAG_CLIENT_SLUG`
   (derived from `DATA_FILE`, e.g. `HVAC_data.json` → `"hvac"`). Added
@@ -176,23 +188,54 @@ end (18 chunks), 3 paraphrased questions (after-hours call fee, financing,
 storm insurance help) all retrieved the correct source chunk. Test
 collection deleted after, same as round 1.
 
-**Pilot round 3, 2026-08-01: live pilot broke twice on first real deploy,
-both root-caused and fixed, both folded into Part 1 above as generic
-lessons.** First `RAG_ENABLED=true` deploy: `/chat` timed out client-side
-("could not reach server"). Root cause was NOT RAG — Roofing-demo's Render
-Start Command had silently diverged from the Procfile (bare
-`gunicorn app_memory:app`, no flags), so every request ran on gunicorn's
-30s-timeout sync-worker default instead of the Procfile's 120s/gthread.
-Fixed by correcting the Start Command directly in Render Settings. Second
-issue, worse: even after that fix, the worker crash-looped continuously
-with **zero incoming traffic** — `WORKER TIMEOUT` → `SIGKILL` → new worker
-→ same crash, roughly every 3 minutes, confirmed via Render's own
-Memory/CPU metrics (climbing toward the 512MB/0.5vCPU Starter limits) and
-by checking thread counts locally. Root cause: chromadb's default
-`anonymized_telemetry=True` background posthog thread. Fixed by passing
-`Settings(anonymized_telemetry=False)` in `rag_store.py`'s client init
-(commit `4daecc9`). **Confirmed stable and live 2026-08-01 8:52 PM**: clean
-boot, `RAG auto-ingested 18 chunks for 'roofing'`, no crashes.
+**Pilot round 3, 2026-08-01: the chromadb incident.** The first
+`RAG_ENABLED=true` deploy broke the live demo, and it took roughly two
+hours and a dozen deploys to actually fix. Written up honestly because
+the wrong turns are the useful part.
+
+*The one real, separate bug (fixed early, unrelated to RAG):*
+Roofing-demo's Render **Start Command had silently diverged from the
+Procfile** — bare `gunicorn app_memory:app`, no flags — so every request
+had always been running on gunicorn's 30s-timeout default instead of the
+Procfile's `--timeout 120`. Nobody noticed until RAG made one request slow
+enough to cross 30s. Fixed in Render Settings. See the Part 1 bullet.
+
+*The actual blocker:* `chromadb` 1.5.9 does not work on this Render
+Starter instance, at all. Its Rust-backed client **hung forever** — never
+returned, no error, no traceback — on the first real request in a deployed
+gunicorn worker, until gunicorn's own `WORKER TIMEOUT` killed the process
+and the cycle repeated every ~2 minutes with zero incoming traffic.
+
+*Four fixes were tried and all failed live*, each costing a deploy:
+1. `Settings(anonymized_telemetry=False)` — chromadb spawns a background
+   posthog thread by default. Worth doing regardless, did not fix this.
+2. `fastembed(threads=1)` — onnxruntime's busy-spin thread pool was the
+   suspect. Also worth keeping, also not the cause.
+3. A **thread-local** chromadb client (one per worker thread).
+4. Switching gunicorn from `gthread` to the `sync` worker.
+
+*What finally gave the answer:* `faulthandler.dump_traceback_later()`
+around `retrieve()`, which printed real stacks from the stuck process.
+Dump 1 caught it inside `chromadb/api/rust.py: list_collections()`. Dump 2,
+after the thread-local fix, caught it inside
+`PersistentClient.__init__ → get_tenant()` — i.e. it now hung on
+*constructing* the client rather than using it. That second dump is what
+killed the whole threading theory: fixes 3 and 4 were both elaborate ways
+of managing an object that couldn't be safely created in the first place.
+
+*The fix that worked: delete the vector database.* This app stores **18
+chunks**. `rag_store.py` now writes `{"chunks": [...], "embeddings":
+[[...]]}` to a JSON file and ranks with a numpy dot product. chromadb was
+dropped from `requirements.txt` entirely; numpy was already present via
+fastembed, so the dependency count went *down*.
+
+**Confirmed working live 2026-08-01 10:09 PM**, worker `2l89h`, commit
+`002fe9d`: `/chat` responds in **2.2s** (was: hung past 130s), no crash
+loop. Verified RAG is genuinely grounding answers, not just not-crashing —
+asked the live bot about emergency tarping fees and it answered "$150
+dispatch fee… additional $75 after-hours fee… credited back toward your
+final repair invoice." Those figures appear **only** in
+`rag_seed_docs/roofing.txt`, nowhere in `roofing_data.json`.
 
 **Not done yet / deliberately stopped short:**
 - Not wired to any real client — the pipeline and the auto-ingest bootstrap
