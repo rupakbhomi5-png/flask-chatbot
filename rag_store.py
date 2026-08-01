@@ -1,51 +1,40 @@
 """
 rag_store.py — lightweight local RAG layer for the chatbot product.
 
-Chunk a client's long-form document once (via ingest_doc.py), embed the
-chunks with a small local model, store them in a per-client Chroma
-collection on disk. At chat time, embed the visitor's message and retrieve
-the closest chunks to ground the reply in the client's actual document
-instead of only the hand-written business_data.json.
+Chunk a client's long-form document, embed the chunks with a small local
+model, keep them in a plain JSON file. At chat time, embed the visitor's
+message and return the closest chunks by cosine similarity, to ground the
+reply in the client's actual document instead of only the hand-written
+business_data.json.
 
-Deliberately NOT sentence-transformers/torch: that stack is several hundred
-MB and this app targets Render's Hobby tier, where deploy size and cold-start
-memory are real constraints. fastembed ships small quantized ONNX models
-(~130MB for the default model below), no GPU, no torch, pip installable.
+WHY NO VECTOR DATABASE (chromadb was removed 2026-08-01 after it broke
+production repeatedly):
+chromadb 1.5.9 could not be made to work on Render's Starter instance. Its
+Rust-backed client hung indefinitely — never returned, no error, no
+traceback — on the first real request in a deployed gunicorn worker.
+Confirmed by two live faulthandler stack dumps: once inside
+list_collections(), once inside PersistentClient.__init__ -> get_tenant().
+Four separate fixes were tried and all failed live: disabling its telemetry
+thread, pinning onnxruntime to threads=1, a thread-local client per worker
+thread, and switching gunicorn from gthread to the sync worker. Each cost a
+deploy and left the demo site crash-looping (gunicorn WORKER TIMEOUT every
+~2 minutes, with zero incoming traffic).
 
-Off by default from the app's side (see RAG_ENABLED in app_memory.py) —
-importing this module costs nothing until ingest_document() or retrieve()
-is actually called, and the embedding model only loads on first use.
-
-THREADING NOTE (load-bearing, read before changing the worker model):
-chromadb 1.5.9's client is backed by a Rust extension that only works when
-constructed AND called from the process's actual main thread. Confirmed
-live 2026-08-01 via two faulthandler stack dumps: it hangs (never returns,
-not just slow) both when a client built on the main thread is called from a
-different thread (list_collections) and when a fresh client is constructed
-on a non-main thread (get_tenant inside PersistentClient.__init__). A
-single-worker ThreadPoolExecutor was tried as a fix and would not have
-helped either, since its worker thread isn't the main thread. The actual
-fix lives in the Procfile/Render Start Command: gunicorn must run this app
-with the sync worker (one thread per process, no request thread pool), not
-gthread — that's what keeps every chromadb call on the same main thread
-that imported this module. Do not reintroduce gthread while RAG_ENABLED
-can be true anywhere without re-solving this.
+The realization that ended it: this app stores ~18 chunks per client. A
+vector *database* — with its tenant/collection/persistence machinery, its
+Rust extension, and its 23MB wheel — is enormously more infrastructure than
+"cosine similarity over a small list" requires. numpy already ships as a
+fastembed dependency, so the entire store is now a few lines of dot product
+over a JSON file: no database, no native extension, no background threads,
+no per-thread state, nothing that can hang. Revisit only if a client's
+document is large enough that a linear scan is genuinely too slow — for
+reference, that's likely somewhere north of 50,000 chunks, versus 18 today.
 """
 import os
-import chromadb
-from chromadb.config import Settings
+import json
+import numpy as np
 
-_CHROMA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rag_db")
-_client = chromadb.PersistentClient(
-    path=_CHROMA_DIR,
-    # anonymized_telemetry defaults True and runs a background posthog
-    # thread that phones home on every client init. On a network-restricted
-    # or slow-egress host that thread can block/retry indefinitely,
-    # starving the process of CPU with zero real traffic — this caused
-    # Roofing-demo's first live crash loop (gunicorn WORKER TIMEOUT with no
-    # incoming requests). Off, unconditionally.
-    settings=Settings(anonymized_telemetry=False),
-)
+_STORE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rag_db")
 
 _embedder = None
 
@@ -54,10 +43,8 @@ def _get_embedder():
     """Lazy singleton — the model loads from disk/downloads on first call,
     not at import time. Keeps startup cheap for demos that never call RAG.
 
-    threads=1 avoids onnxruntime's default busy-spin thread pool, a
-    separate latent risk on a CPU-throttled instance — not the cause of the
-    live hang (that was entirely the chromadb client threading issue, see
-    module docstring), but worth keeping regardless."""
+    threads=1 avoids onnxruntime's default busy-spin thread pool, which is a
+    real risk on this CPU-throttled instance (0.5 vCPU)."""
     global _embedder
     if _embedder is None:
         from fastembed import TextEmbedding
@@ -65,15 +52,15 @@ def _get_embedder():
     return _embedder
 
 
-def _collection(client_slug: str):
-    return _client.get_or_create_collection(name=client_slug)
+def _store_path(client_slug: str) -> str:
+    return os.path.join(_STORE_DIR, f"{client_slug}.json")
 
 
 def has_collection(client_slug: str) -> bool:
-    """Whether client_slug already has an ingested collection on disk. Render's
-    free/Starter filesystem is ephemeral across deploys and restarts, so this
-    is checked fresh on every boot rather than assumed persistent."""
-    return client_slug in {c.name for c in _client.list_collections()}
+    """Whether client_slug has an ingested document on disk. Render's
+    filesystem is ephemeral across deploys and restarts, so this is checked
+    fresh on every boot rather than assumed persistent."""
+    return os.path.exists(_store_path(client_slug))
 
 
 def chunk_text(text: str, max_words: int = 150) -> list[str]:
@@ -94,35 +81,46 @@ def chunk_text(text: str, max_words: int = 150) -> list[str]:
 
 
 def ingest_document(client_slug: str, text: str, source_name: str = "document") -> int:
-    """Chunk + embed + store. Re-running for the same client_slug replaces
-    that client's whole collection rather than duplicating or appending —
-    onboarding is a full re-index, not an incremental update, since these
-    docs are small enough that re-embedding everything is cheap and simple
-    beats a stale-chunk bookkeeping problem."""
+    """Chunk + embed + write to disk. Re-running for the same client_slug
+    replaces that client's whole file rather than appending — onboarding is
+    a full re-index, not an incremental update, since these docs are small
+    enough that re-embedding everything is cheap and simple beats a
+    stale-chunk bookkeeping problem."""
     chunks = chunk_text(text)
     if not chunks:
         return 0
-    if has_collection(client_slug):
-        _client.delete_collection(name=client_slug)
-    col = _collection(client_slug)
-    embeddings = list(_get_embedder().embed(chunks))
-    col.add(
-        ids=[f"{client_slug}_{i}" for i in range(len(chunks))],
-        embeddings=[e.tolist() for e in embeddings],
-        documents=chunks,
-        metadatas=[{"source": source_name, "chunk": i} for i in range(len(chunks))],
-    )
+    embeddings = [e.tolist() for e in _get_embedder().embed(chunks)]
+    os.makedirs(_STORE_DIR, exist_ok=True)
+    with open(_store_path(client_slug), "w", encoding="utf-8") as f:
+        json.dump(
+            {"source": source_name, "chunks": chunks, "embeddings": embeddings},
+            f,
+        )
     return len(chunks)
 
 
 def retrieve(client_slug: str, query: str, k: int = 4) -> list[str]:
-    """Top-k closest chunks for this query. Empty list if the client has no
-    ingested collection yet — callers must treat that as "no RAG context
-    available" and fall back to business_data.json alone, not as an error."""
+    """Top-k closest chunks for this query by cosine similarity. Empty list
+    if the client has no ingested document yet — callers must treat that as
+    "no RAG context available" and fall back to business_data.json alone,
+    not as an error."""
     if not has_collection(client_slug):
         return []
-    col = _collection(client_slug)
-    query_embedding = list(_get_embedder().embed([query]))[0].tolist()
-    results = col.query(query_embeddings=[query_embedding], n_results=k)
-    docs = results.get("documents")
-    return docs[0] if docs else []
+    with open(_store_path(client_slug), "r", encoding="utf-8") as f:
+        store = json.load(f)
+    doc_vectors = np.array(store["embeddings"], dtype=np.float32)
+    if doc_vectors.size == 0:
+        return []
+    query_vector = np.array(
+        list(_get_embedder().embed([query]))[0], dtype=np.float32
+    )
+    # Cosine similarity: normalize both sides, then dot. Guard against a
+    # zero-norm vector so a degenerate embedding can't raise here — RAG
+    # failing must degrade to "no context," never break the whole reply.
+    doc_norms = np.linalg.norm(doc_vectors, axis=1)
+    query_norm = np.linalg.norm(query_vector)
+    if query_norm == 0 or not np.any(doc_norms):
+        return []
+    scores = (doc_vectors @ query_vector) / (doc_norms * query_norm + 1e-10)
+    top_indices = np.argsort(scores)[::-1][:k]
+    return [store["chunks"][i] for i in top_indices]
