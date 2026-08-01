@@ -86,6 +86,32 @@ LLM as grounding). Five moving parts, no more.
   something it shouldn't have access to, the cause is a data-entry mistake
   (ingested the wrong file under that slug), not a leak in the retrieval
   logic itself.
+- **Always disable chromadb's telemetry.** `chromadb.PersistentClient(...)`
+  defaults `anonymized_telemetry=True`, which spins up a background posthog
+  thread on client init. On a CPU/memory-constrained host (this app's Render
+  Starter instance: 0.5 vCPU, 512MB) that thread caused a full crash loop —
+  gunicorn's own heartbeat starved with **zero incoming HTTP traffic**,
+  `WORKER TIMEOUT` → `SIGKILL` → new worker → same crash again roughly every
+  3 minutes. Looked exactly like a slow-request problem at first (the first
+  symptom was a timed-out `/chat` call) but the real tell was worker deaths
+  with no request in the log between them. Fix: pass
+  `settings=Settings(anonymized_telemetry=False)` to the client
+  unconditionally, every time, on every future project that uses chromadb.
+  Verified locally after the fix: a full ingest+retrieve cycle left the
+  process at exactly 1 thread (main only) — before the fix this is where
+  the extra background thread would show up.
+- **Confirm Render's actual Start Command matches the Procfile before
+  blaming application code for timeouts.** Render only reads `Procfile` when
+  the service's Settings → Start Command field is empty. If a Start Command
+  was ever set by hand (even months ago, even for an unrelated reason), it
+  silently wins forever and the Procfile is dead text nobody's reading. This
+  service had Start Command `gunicorn app_memory:app` — no
+  `--worker-class`, no `--timeout` — while the Procfile said `gthread`
+  threads=8 timeout=120. Every request ran on the gunicorn default (sync
+  worker, 30s timeout) with nobody aware of it, until a slower feature
+  (RAG's embedding step) finally exceeded 30s and exposed it. Check
+  Settings → Start Command directly, don't assume the Procfile is what's
+  actually running, on any Render service before debugging a timeout.
 
 ---
 
@@ -149,6 +175,24 @@ no real roofing client exists yet. Tested locally: auto-ingest ran end to
 end (18 chunks), 3 paraphrased questions (after-hours call fee, financing,
 storm insurance help) all retrieved the correct source chunk. Test
 collection deleted after, same as round 1.
+
+**Pilot round 3, 2026-08-01: live pilot broke twice on first real deploy,
+both root-caused and fixed, both folded into Part 1 above as generic
+lessons.** First `RAG_ENABLED=true` deploy: `/chat` timed out client-side
+("could not reach server"). Root cause was NOT RAG — Roofing-demo's Render
+Start Command had silently diverged from the Procfile (bare
+`gunicorn app_memory:app`, no flags), so every request ran on gunicorn's
+30s-timeout sync-worker default instead of the Procfile's 120s/gthread.
+Fixed by correcting the Start Command directly in Render Settings. Second
+issue, worse: even after that fix, the worker crash-looped continuously
+with **zero incoming traffic** — `WORKER TIMEOUT` → `SIGKILL` → new worker
+→ same crash, roughly every 3 minutes, confirmed via Render's own
+Memory/CPU metrics (climbing toward the 512MB/0.5vCPU Starter limits) and
+by checking thread counts locally. Root cause: chromadb's default
+`anonymized_telemetry=True` background posthog thread. Fixed by passing
+`Settings(anonymized_telemetry=False)` in `rag_store.py`'s client init
+(commit `4daecc9`). **Confirmed stable and live 2026-08-01 8:52 PM**: clean
+boot, `RAG auto-ingested 18 chunks for 'roofing'`, no crashes.
 
 **Not done yet / deliberately stopped short:**
 - Not wired to any real client — the pipeline and the auto-ingest bootstrap
