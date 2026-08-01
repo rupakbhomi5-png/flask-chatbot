@@ -18,9 +18,18 @@ is actually called, and the embedding model only loads on first use.
 """
 import os
 import chromadb
+from chromadb.config import Settings
 
 _CHROMA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rag_db")
-_client = chromadb.PersistentClient(path=_CHROMA_DIR)
+# anonymized_telemetry defaults True and runs a background posthog thread that
+# phones home on every client init. On a network-restricted or slow-egress
+# host that thread can block/retry indefinitely, starving the process of CPU
+# with zero real traffic — this is what caused Roofing-demo's live crash loop
+# (gunicorn WORKER TIMEOUT with no incoming requests). Off, unconditionally.
+_client = chromadb.PersistentClient(
+    path=_CHROMA_DIR,
+    settings=Settings(anonymized_telemetry=False),
+)
 
 _embedder = None
 

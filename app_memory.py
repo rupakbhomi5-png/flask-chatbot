@@ -519,9 +519,7 @@ def chat():
     # tool_use iterations and re-embedding on every loop pass would be wasted
     # work. Empty string (RAG off, or nothing relevant found) leaves
     # SYSTEM_PROMPT byte-for-byte what it was before this feature existed.
-    print(f"→ /chat: building system prompt (RAG_ENABLED={_RAG_ENABLED})", flush=True)
     request_system_prompt = SYSTEM_PROMPT + build_rag_context(user_message)
-    print("→ /chat: system prompt built, entering tool loop", flush=True)
 
     def generate():
         nonlocal history
@@ -529,7 +527,6 @@ def chat():
             used_tools = False
 
             for _ in range(MAX_TOOL_ITERATIONS):
-                print("→ /chat: calling client.messages.create", flush=True)
                 response = client.messages.create(
                     model=MODEL_NAME,
                     # 500, not 300: the PM config packs unit/issue/severity/
