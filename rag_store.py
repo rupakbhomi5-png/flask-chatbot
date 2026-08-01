@@ -36,11 +36,23 @@ _embedder = None
 
 def _get_embedder():
     """Lazy singleton — the model loads from disk/downloads on first call,
-    not at import time. Keeps startup cheap for demos that never call RAG."""
+    not at import time. Keeps startup cheap for demos that never call RAG.
+
+    threads=1 is load-bearing, not a tuning knob. Left at fastembed's default
+    (None), onnxruntime auto-detects thread count from the host's reported
+    CPU count and busy-spin-waits its thread pool for low latency — fine on
+    a full core, but under a cgroup CPU quota (this app's Render Starter
+    instance: 0.5 vCPU) the spin-waiting itself gets throttled, and a call
+    that takes 10ms unconstrained can take 100+ seconds throttled. Confirmed
+    2026-08-01: identical retrieve() call took 0.01s locally (full CPU) and
+    hung past a 130s client timeout live on Render, with no error — just
+    silence until gunicorn's own WORKER TIMEOUT killed the process. threads=1
+    means onnxruntime runs inference on the calling thread directly, no
+    separate spinning worker pool to starve."""
     global _embedder
     if _embedder is None:
         from fastembed import TextEmbedding
-        _embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+        _embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", threads=1)
     return _embedder
 
 
