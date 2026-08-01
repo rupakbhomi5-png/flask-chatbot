@@ -15,43 +15,37 @@ memory are real constraints. fastembed ships small quantized ONNX models
 Off by default from the app's side (see RAG_ENABLED in app_memory.py) —
 importing this module costs nothing until ingest_document() or retrieve()
 is actually called, and the embedding model only loads on first use.
+
+THREADING NOTE (load-bearing, read before changing the worker model):
+chromadb 1.5.9's client is backed by a Rust extension that only works when
+constructed AND called from the process's actual main thread. Confirmed
+live 2026-08-01 via two faulthandler stack dumps: it hangs (never returns,
+not just slow) both when a client built on the main thread is called from a
+different thread (list_collections) and when a fresh client is constructed
+on a non-main thread (get_tenant inside PersistentClient.__init__). A
+single-worker ThreadPoolExecutor was tried as a fix and would not have
+helped either, since its worker thread isn't the main thread. The actual
+fix lives in the Procfile/Render Start Command: gunicorn must run this app
+with the sync worker (one thread per process, no request thread pool), not
+gthread — that's what keeps every chromadb call on the same main thread
+that imported this module. Do not reintroduce gthread while RAG_ENABLED
+can be true anywhere without re-solving this.
 """
 import os
-import sys
-import threading
-import faulthandler
 import chromadb
 from chromadb.config import Settings
 
 _CHROMA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rag_db")
-
-# One chromadb client PER THREAD, not a shared global. Confirmed live via a
-# faulthandler stack dump 2026-08-01: a single PersistentClient constructed
-# at boot (main thread) hangs indefinitely — not slow, genuinely never
-# returns — when a gthread worker thread later calls into it
-# (has_collection -> list_collections -> chromadb/api/rust.py). chromadb
-# 1.5.9's client is backed by a Rust extension; something in it does not
-# tolerate being called from a thread other than the one that created it.
-# threading.local() sidesteps this entirely — each thread constructs and
-# reuses its own client against the same on-disk path, which is cheap
-# (attaching to existing files, not re-ingesting).
-_local = threading.local()
-
-
-def _client():
-    if not hasattr(_local, "client"):
-        _local.client = chromadb.PersistentClient(
-            path=_CHROMA_DIR,
-            # anonymized_telemetry defaults True and runs a background
-            # posthog thread that phones home on every client init. On a
-            # network-restricted/slow-egress host that thread can block or
-            # retry indefinitely, starving the process of CPU with zero real
-            # traffic — this caused Roofing-demo's first live crash loop
-            # (gunicorn WORKER TIMEOUT, no incoming requests). Off, always.
-            settings=Settings(anonymized_telemetry=False),
-        )
-    return _local.client
-
+_client = chromadb.PersistentClient(
+    path=_CHROMA_DIR,
+    # anonymized_telemetry defaults True and runs a background posthog
+    # thread that phones home on every client init. On a network-restricted
+    # or slow-egress host that thread can block/retry indefinitely,
+    # starving the process of CPU with zero real traffic — this caused
+    # Roofing-demo's first live crash loop (gunicorn WORKER TIMEOUT with no
+    # incoming requests). Off, unconditionally.
+    settings=Settings(anonymized_telemetry=False),
+)
 
 _embedder = None
 
@@ -59,13 +53,11 @@ _embedder = None
 def _get_embedder():
     """Lazy singleton — the model loads from disk/downloads on first call,
     not at import time. Keeps startup cheap for demos that never call RAG.
-    Safe to share across threads (unlike the chromadb client above): fastembed
-    only hit the same disk-download step, not the hang.
 
-    threads=1 is still worth keeping even though it wasn't the fix for the
-    live hang (that was the chromadb client, see _client() above) — it
-    avoids onnxruntime's default busy-spin thread pool, which is its own
-    latent risk on a CPU-throttled instance."""
+    threads=1 avoids onnxruntime's default busy-spin thread pool, a
+    separate latent risk on a CPU-throttled instance — not the cause of the
+    live hang (that was entirely the chromadb client threading issue, see
+    module docstring), but worth keeping regardless."""
     global _embedder
     if _embedder is None:
         from fastembed import TextEmbedding
@@ -74,14 +66,14 @@ def _get_embedder():
 
 
 def _collection(client_slug: str):
-    return _client().get_or_create_collection(name=client_slug)
+    return _client.get_or_create_collection(name=client_slug)
 
 
 def has_collection(client_slug: str) -> bool:
     """Whether client_slug already has an ingested collection on disk. Render's
     free/Starter filesystem is ephemeral across deploys and restarts, so this
     is checked fresh on every boot rather than assumed persistent."""
-    return client_slug in {c.name for c in _client().list_collections()}
+    return client_slug in {c.name for c in _client.list_collections()}
 
 
 def chunk_text(text: str, max_words: int = 150) -> list[str]:
@@ -111,7 +103,7 @@ def ingest_document(client_slug: str, text: str, source_name: str = "document") 
     if not chunks:
         return 0
     if has_collection(client_slug):
-        _client().delete_collection(name=client_slug)
+        _client.delete_collection(name=client_slug)
     col = _collection(client_slug)
     embeddings = list(_get_embedder().embed(chunks))
     col.add(
@@ -127,26 +119,10 @@ def retrieve(client_slug: str, query: str, k: int = 4) -> list[str]:
     """Top-k closest chunks for this query. Empty list if the client has no
     ingested collection yet — callers must treat that as "no RAG context
     available" and fall back to business_data.json alone, not as an error."""
-    _tag = f"[retrieve tid={threading.get_ident()}]"
-    print(f"{_tag} start", flush=True)
-    # Thread-local client fixed the FIRST confirmed hang (list_collections
-    # from has_collection) but the live symptom persisted after that fix
-    # deployed — so something else in this call is also blocking. Keep the
-    # stack dump armed until every step here is confirmed fast live, not
-    # just locally.
-    faulthandler.dump_traceback_later(15, exit=False, file=sys.stderr)
-    try:
-        if not has_collection(client_slug):
-            print(f"{_tag} no collection", flush=True)
-            return []
-        print(f"{_tag} has_collection ok", flush=True)
-        col = _collection(client_slug)
-        print(f"{_tag} got collection handle", flush=True)
-        query_embedding = list(_get_embedder().embed([query]))[0].tolist()
-        print(f"{_tag} embedded query", flush=True)
-        results = col.query(query_embeddings=[query_embedding], n_results=k)
-        print(f"{_tag} col.query done", flush=True)
-        docs = results.get("documents")
-        return docs[0] if docs else []
-    finally:
-        faulthandler.cancel_dump_traceback_later()
+    if not has_collection(client_slug):
+        return []
+    col = _collection(client_slug)
+    query_embedding = list(_get_embedder().embed([query]))[0].tolist()
+    results = col.query(query_embeddings=[query_embedding], n_results=k)
+    docs = results.get("documents")
+    return docs[0] if docs else []
