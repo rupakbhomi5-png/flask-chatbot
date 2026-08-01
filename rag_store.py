@@ -17,8 +17,10 @@ importing this module costs nothing until ingest_document() or retrieve()
 is actually called, and the embedding model only loads on first use.
 """
 import os
+import sys
 import time
 import threading
+import faulthandler
 import chromadb
 from chromadb.config import Settings
 
@@ -117,17 +119,25 @@ def retrieve(client_slug: str, query: str, k: int = 4) -> list[str]:
     _tag = f"[retrieve tid={threading.get_ident()}]"
     _t0 = time.monotonic()
     print(f"{_tag} start", flush=True)
-    if not has_collection(client_slug):
-        print(f"{_tag} no collection, {time.monotonic() - _t0:.2f}s", flush=True)
-        return []
-    print(f"{_tag} has_collection ok, {time.monotonic() - _t0:.2f}s", flush=True)
-    col = _collection(client_slug)
-    print(f"{_tag} got collection handle, {time.monotonic() - _t0:.2f}s", flush=True)
-    embedder = _get_embedder()
-    print(f"{_tag} got embedder, {time.monotonic() - _t0:.2f}s", flush=True)
-    query_embedding = list(embedder.embed([query]))[0].tolist()
-    print(f"{_tag} embedded query, {time.monotonic() - _t0:.2f}s", flush=True)
-    results = col.query(query_embeddings=[query_embedding], n_results=k)
-    print(f"{_tag} col.query done, {time.monotonic() - _t0:.2f}s", flush=True)
-    docs = results.get("documents")
-    return docs[0] if docs else []
+    # Live hang under real traffic survives threads=1 too — dump every
+    # thread's actual C/Python stack to stderr if this call doesn't finish
+    # within 15s, instead of guessing further. Cancelled in the finally so
+    # it never fires on the normal fast path.
+    faulthandler.dump_traceback_later(15, exit=False, file=sys.stderr)
+    try:
+        if not has_collection(client_slug):
+            print(f"{_tag} no collection, {time.monotonic() - _t0:.2f}s", flush=True)
+            return []
+        print(f"{_tag} has_collection ok, {time.monotonic() - _t0:.2f}s", flush=True)
+        col = _collection(client_slug)
+        print(f"{_tag} got collection handle, {time.monotonic() - _t0:.2f}s", flush=True)
+        embedder = _get_embedder()
+        print(f"{_tag} got embedder, {time.monotonic() - _t0:.2f}s", flush=True)
+        query_embedding = list(embedder.embed([query]))[0].tolist()
+        print(f"{_tag} embedded query, {time.monotonic() - _t0:.2f}s", flush=True)
+        results = col.query(query_embeddings=[query_embedding], n_results=k)
+        print(f"{_tag} col.query done, {time.monotonic() - _t0:.2f}s", flush=True)
+        docs = results.get("documents")
+        return docs[0] if docs else []
+    finally:
+        faulthandler.cancel_dump_traceback_later()
