@@ -381,6 +381,22 @@
         }
         .close-widget-btn { display: none; }
 
+        .demo-banner {
+            background: #FFF6D9;
+            color: #6B5312;
+            border-bottom: 1px solid #EBD9A0;
+            padding: 8px 16px;
+            font-size: 12px;
+            line-height: 1.45;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        :root[data-theme="dark"] .demo-banner {
+            background: rgba(255,214,0,0.07);
+            border-bottom-color: var(--border);
+            color: #C9B77A;
+        }
+
         .dev-credit {
             text-align: center;
             font-size: 11px;
@@ -414,6 +430,10 @@
         </div>
     </div>
 
+    <div class="demo-banner" id="demo-banner">
+        This is a live demo, not a real business. {{ store_name }} is fictional, so feel free to test the chat with fake contact details.
+    </div>
+
     <div class="welcome">
         🔨 Free inspections &amp; estimates. Ask about repairs, replacements, or storm damage.
     </div>
@@ -431,7 +451,7 @@
         </button>
     </div>
 
-    <div class="dev-credit" id="dev-credit">Built by Rupak. Need a custom AI chatbot like this? <a href="mailto:rupak@rupakco.com">rupak@rupakco.com</a></div>
+    <div class="dev-credit" id="dev-credit">Built by Rupak. Need a custom AI chatbot like this? <a href="mailto:rupakbhomi5@gmail.com">rupakbhomi5@gmail.com</a></div>
 
 </div>
 <script>
@@ -469,6 +489,8 @@
         document.querySelector(".chat-container").style.display = "none";
         document.getElementById("launcher-bubble").style.display = "flex";
         document.getElementById("dev-credit").style.display = "none";
+        const demoBanner = document.getElementById("demo-banner");
+        if (demoBanner) demoBanner.style.display = "none";
     }
 
     // Clicking outside the widget (on the client's own page) collapses it
