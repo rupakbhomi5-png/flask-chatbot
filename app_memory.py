@@ -648,4 +648,4 @@ def rate_limit_handler(e):
     return jsonify({"error": "Too many requests. Please slow down."}), 429
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=False)
