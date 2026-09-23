@@ -109,7 +109,7 @@ limiter = Limiter(
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY")) if LLM_PROVIDER != "gemini" else None
 
 gemini_client = None
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 if LLM_PROVIDER == "gemini":
     from google import genai
     from google.genai import types as genai_types
