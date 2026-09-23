@@ -321,6 +321,13 @@
         .qr-btn:hover { border-color: var(--brand); background: var(--brand-light); }
         .qr-btn:hover::after { transform: translateX(2px); }
 
+        .wa-handoff {
+            display: inline-flex; align-items: center; gap: 6px;
+            margin-top: 8px; padding: 8px 14px; border-radius: 999px;
+            background: #25D366; color: #fff; font-weight: 600; font-size: 13px;
+            text-decoration: none; width: fit-content;
+        }
+        .wa-handoff:hover { background: #1ebe5a; }
         .launcher-bubble {
             display: none;
             position: relative;
@@ -455,6 +462,26 @@
     // Greeting and quick buttons come from the data file ("greeting",
     // "quick_replies") when present; the text below is only the fallback.
     const GREETING_TEXT = {{ (greeting or "Hi! 👋 Ask me what we repair or how pickup works. For prices, we check the item in person first.")|tojson }};
+    const WHATSAPP_NUMBER = {{ (whatsapp_number or "")|tojson }};
+    const HANDOFF_TAG = "[WHATSAPP]";
+
+    // Adds a "Message us on WhatsApp" button under a bot reply. The bot
+    // ends a reply with [WHATSAPP] when a human should take over; errors
+    // always get the button. Opens in a new tab (WhatsApp can't load
+    // inside this iframe) with the customer's question pre-typed.
+    function addWhatsAppButton(afterEl, question) {
+        if (!WHATSAPP_NUMBER) return;
+        const msg = afterEl.closest(".message");
+        if (!msg || msg.querySelector(".wa-handoff")) return;
+        const a = document.createElement("a");
+        a.className = "wa-handoff";
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.href = "https://wa.me/" + WHATSAPP_NUMBER + (question ? "?text=" + encodeURIComponent(question) : "");
+        a.textContent = "Message us on WhatsApp";
+        msg.appendChild(a);
+    }
+
     const QUICK_REPLIES = {{ (quick_replies or [
         {"label": "💻 Laptop repair", "msg": "Do you repair laptops?"},
         {"label": "🚚 Home pickup", "msg": "Do you pick up the laptop from home?"},
@@ -509,7 +536,9 @@
             if (turn.role === "user") {
                 appendMessage("You", escapeHtml(turn.content), "user");
             } else if (turn.role === "assistant") {
-                appendMessage(BOT_NAME, escapeHtml(turn.content), "assistant");
+                const handoff = turn.content.includes(HANDOFF_TAG);
+                const el = appendMessage(BOT_NAME, escapeHtml(turn.content.replace(HANDOFF_TAG, "").trim()), "assistant");
+                if (handoff) addWhatsAppButton(el, "");
             }
         }
     }
@@ -555,6 +584,7 @@
 
         appendMessage("You", escapeHtml(userMessage), "user");
         const botEl = appendMessage(BOT_NAME, "", "assistant");
+        let rawReply = "";
 
         try {
             const response = await fetch("/chat", {
@@ -565,7 +595,8 @@
             });
 
             if (!response.ok || !response.body) {
-                botEl.textContent = "Error: could not reach server.";
+                botEl.textContent = "Chat is busy right now. Please message us on WhatsApp.";
+                addWhatsAppButton(botEl, userMessage);
                 return;
             }
 
@@ -584,20 +615,24 @@
                     try {
                         const payload = JSON.parse(line.slice(6));
                         if (payload.token) {
-                            botEl.textContent += payload.token;
+                            rawReply += payload.token;
+                            botEl.textContent = rawReply.replace(HANDOFF_TAG, "").trimEnd();
                             document.getElementById("chat-box").scrollTop = document.getElementById("chat-box").scrollHeight;
                         } else if (payload.done && payload.history) {
+                            if (rawReply.includes(HANDOFF_TAG)) addWhatsAppButton(botEl, userMessage);
                             // Store updated history so next message includes full context
                             conversationHistory = payload.history;
                             sessionStorage.setItem("conversationHistory", JSON.stringify(conversationHistory));
                         } else if (payload.error) {
                             botEl.textContent = payload.error;
+                            addWhatsAppButton(botEl, userMessage);
                         }
                     } catch (_) {}
                 }
             }
         } catch (err) {
-            botEl.textContent = "Network error. Please try again.";
+            botEl.textContent = "Network error. Please message us on WhatsApp.";
+            addWhatsAppButton(botEl, userMessage);
         } finally {
             input.disabled = false;
             if (sendBtn) sendBtn.disabled = false;

@@ -116,6 +116,28 @@ if LLM_PROVIDER == "gemini":
     gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
     print(f"✓ LLM provider: Gemini ({GEMINI_MODEL})")
 
+def gemini_error_kind(e: Exception) -> str:
+    """Label a Gemini failure for the server log. The visitor always gets
+    the same WhatsApp fallback; this is only so the owner can tell a quota
+    problem from a bad key from Google being down."""
+    code = getattr(e, "code", None)
+    text = str(e)
+    if code == 429 or "RESOURCE_EXHAUSTED" in text:
+        return "QUOTA/RATE LIMIT"
+    if code in (401, 403) or "API key not valid" in text or "PERMISSION_DENIED" in text:
+        return "AUTH (bad, expired or blocked key)"
+    if code == 404 or "NOT_FOUND" in text:
+        return "MODEL NOT FOUND (check GEMINI_MODEL)"
+    if isinstance(code, int) and 400 <= code < 500:
+        return f"BAD REQUEST ({code})"
+    if isinstance(code, int) and code >= 500:
+        return f"GEMINI SERVER ERROR ({code})"
+    if "timed out" in text.lower() or "timeout" in type(e).__name__.lower():
+        return "TIMEOUT"
+    if "connect" in text.lower() or "Connection" in type(e).__name__:
+        return "NETWORK"
+    return "UNKNOWN"
+
 def gemini_reply(system_prompt: str, history: list) -> str:
     """One text-only Gemini call. History is the sanitized text-only
     user/assistant list; Gemini calls the assistant role "model"."""
@@ -508,7 +530,8 @@ def run_tool(tool_name: str, tool_input: dict, visitor_ip: str = "") -> str:
 def index():
     template = os.environ.get("TEMPLATE_FILE", "index.html")
     return render_template(template, bot_name=DATA["bot_name"], store_name=DATA["store_name"],
-                           greeting=DATA.get("greeting"), quick_replies=DATA.get("quick_replies"))
+                           greeting=DATA.get("greeting"), quick_replies=DATA.get("quick_replies"),
+                           whatsapp_number=DATA.get("whatsapp_number"))
 
 # EMBEDDABLE WIDGET LOADER — a client pastes <script src=".../embed.js"></script>
 # on their own site. This creates a small floating iframe pointing back at "/"
@@ -602,7 +625,9 @@ def chat():
             try:
                 final_text = gemini_reply(request_system_prompt, history)
                 if not final_text:
-                    final_text = "Sorry, I couldn't answer that. Please message us on WhatsApp."
+                    # Empty reply (e.g. blocked by Gemini's safety filter).
+                    print("Gemini error [EMPTY REPLY]: no text returned", flush=True)
+                    final_text = "Sorry, I can't answer that here. Please message us on WhatsApp. [WHATSAPP]"
                 words = final_text.split(" ")
                 for i, word in enumerate(words):
                     token = word if i == len(words) - 1 else word + " "
@@ -614,8 +639,8 @@ def chat():
                 yield f"data: {json.dumps({'done': True, 'history': trimmed})}\n\n"
             except Exception as e:
                 # Never echo the provider's error text to the visitor (it can
-                # include request details). Log it server-side only.
-                print(f"Gemini error: {type(e).__name__}: {e}", flush=True)
+                # include request details). Log a clear category server-side.
+                print(f"Gemini error [{gemini_error_kind(e)}]: {type(e).__name__}: {e}", flush=True)
                 yield f"data: {json.dumps({'error': 'Chat is busy right now. Please message us on WhatsApp.'})}\n\n"
             return
         try:
