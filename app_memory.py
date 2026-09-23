@@ -1,4 +1,5 @@
 import os
+import hmac
 import time
 import sys
 import json
@@ -68,6 +69,7 @@ def set_security_headers(response):
     return response
 
 MAX_HISTORY_MESSAGES = 6
+CHAT_FALLBACK = "Chat is busy right now. Please message us on WhatsApp."
 MODEL_NAME = "claude-haiku-4-5-20251001"
 MAX_TOOL_ITERATIONS = 3
 
@@ -641,7 +643,7 @@ def chat():
                 # Never echo the provider's error text to the visitor (it can
                 # include request details). Log a clear category server-side.
                 print(f"Gemini error [{gemini_error_kind(e)}]: {type(e).__name__}: {e}", flush=True)
-                yield f"data: {json.dumps({'error': 'Chat is busy right now. Please message us on WhatsApp.'})}\n\n"
+                yield f"data: {json.dumps({'error': CHAT_FALLBACK})}\n\n"
             return
         try:
             used_tools = False
@@ -722,17 +724,23 @@ def chat():
                 trimmed = trimmed[1:]
             yield f"data: {json.dumps({'done': True, 'history': trimmed})}\n\n"
 
-        except anthropic.AuthenticationError:
-            yield f"data: {json.dumps({'error': 'Invalid API key. Check your configuration.'})}\n\n"
-        except anthropic.RateLimitError:
-            yield f"data: {json.dumps({'error': 'Rate limit reached. Please wait and try again.'})}\n\n"
-        except anthropic.APIConnectionError:
-            yield f"data: {json.dumps({'error': 'Could not connect to AI service. Check your internet.'})}\n\n"
+        # Visitors only ever see the generic fallback; the real reason goes to
+        # the server log (Lazy Developer: don't leak internal error details).
+        except anthropic.AuthenticationError as e:
+            print(f"Claude error [AUTH]: {e}", flush=True)
+            yield f"data: {json.dumps({'error': CHAT_FALLBACK})}\n\n"
+        except anthropic.RateLimitError as e:
+            print(f"Claude error [RATE LIMIT]: {e}", flush=True)
+            yield f"data: {json.dumps({'error': CHAT_FALLBACK})}\n\n"
+        except anthropic.APIConnectionError as e:
+            print(f"Claude error [NETWORK]: {e}", flush=True)
+            yield f"data: {json.dumps({'error': CHAT_FALLBACK})}\n\n"
         except anthropic.APIStatusError as e:
-            yield f"data: {json.dumps({'error': f'API error: {e.status_code}'})}\n\n"
+            print(f"Claude error [STATUS {e.status_code}]: {e}", flush=True)
+            yield f"data: {json.dumps({'error': CHAT_FALLBACK})}\n\n"
         except Exception as e:
-            print(f"Unhandled error: {e}")
-            yield f"data: {json.dumps({'error': 'Something went wrong. Please try again.'})}\n\n"
+            print(f"Unhandled error: {type(e).__name__}: {e}", flush=True)
+            yield f"data: {json.dumps({'error': CHAT_FALLBACK})}\n\n"
 
     return Response(
         stream_with_context(generate()),
@@ -751,7 +759,10 @@ def voice_lead():
     if os.environ.get("VOICE_ENABLED", "false").lower() != "true":
         return jsonify({"status": "disabled"}), 404
     secret = os.environ.get("VOICE_WEBHOOK_SECRET", "")
-    if not secret or request.headers.get("X-Webhook-Secret") != secret:
+    provided = request.headers.get("X-Webhook-Secret", "")
+    # Constant-time compare (Lazy Developer: Securing Endpoints). Fails closed
+    # when the secret isn't configured.
+    if not secret or not hmac.compare_digest(provided.encode(), secret.encode()):
         return jsonify({"status": "unauthorized"}), 401
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()

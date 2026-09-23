@@ -656,8 +656,11 @@
     // ── Mic ──────────────────────────────────────────────────────────────
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const micBtn = document.getElementById("mic-btn");
+    // Off: the server's Permissions-Policy blocks the microphone, so the
+    // button could never work. Set to true only together with a policy change.
+    const MIC_ENABLED = false;
 
-    if (!SpeechRecognition) {
+    if (!MIC_ENABLED || !SpeechRecognition) {
         micBtn.style.display = "none";
     } else {
         let recognition = null;
