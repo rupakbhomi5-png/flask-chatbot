@@ -16,7 +16,7 @@ mcp = FastMCP("business-bot")
 def load_data() -> dict:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     data_file = os.environ.get("DATA_FILE", "business_data.json")
-    with open(os.path.join(base_dir, data_file), "r") as f:
+    with open(os.path.join(base_dir, data_file), "r", encoding="utf-8") as f:
         return json.load(f)
 # Load once at startup - tools are registered based on what keys exists
 _data = load_data()

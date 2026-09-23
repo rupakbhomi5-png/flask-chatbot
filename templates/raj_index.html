@@ -452,12 +452,14 @@
         if (e.data && e.data.type === "rupakco-widget-collapse") closeWidget();
     });
 
-    const GREETING_TEXT = "Hi! 👋 Ask me what we repair or how pickup works. For prices, we check the item in person first.";
-    const QUICK_REPLIES = [
-        { label: "💻 Laptop repair", msg: "Do you repair laptops?" },
-        { label: "🚚 Home pickup", msg: "Do you pick up the laptop from home?" },
-        { label: "🖨️ Printer or other repair", msg: "What else do you repair?" }
-    ];
+    // Greeting and quick buttons come from the data file ("greeting",
+    // "quick_replies") when present; the text below is only the fallback.
+    const GREETING_TEXT = {{ (greeting or "Hi! 👋 Ask me what we repair or how pickup works. For prices, we check the item in person first.")|tojson }};
+    const QUICK_REPLIES = {{ (quick_replies or [
+        {"label": "💻 Laptop repair", "msg": "Do you repair laptops?"},
+        {"label": "🚚 Home pickup", "msg": "Do you pick up the laptop from home?"},
+        {"label": "🖨️ Printer or other repair", "msg": "What else do you repair?"}
+    ])|tojson }};
 
     // Theme: explicit choice in localStorage wins, otherwise follow system preference.
     (function initTheme() {

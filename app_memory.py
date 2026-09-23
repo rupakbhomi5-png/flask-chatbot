@@ -173,7 +173,7 @@ def load_data() -> dict:
     data_file = os.environ.get("DATA_FILE", "business_data.json")
     if not os.environ.get("DATA_FILE"):
         print(f"⚠ DATA_FILE not set — defaulting to {data_file}. Set it explicitly in production.")
-    with open(os.path.join(base_dir, data_file), "r") as f:
+    with open(os.path.join(base_dir, data_file), "r", encoding="utf-8") as f:
         data = json.load(f)
     print(f"✓ Data loaded: {data_file} → {data.get('store_name', '?')}")
     return data
@@ -213,6 +213,19 @@ def build_system_prompt(data: dict) -> str:
     # everything else to the owner's WhatsApp. No lead capture, no promised
     # calls (the owner doesn't take English phone calls), no prices.
     if data.get("mode") == "whatsapp":
+        # Rules come from the data file's "rules" list when present, so the
+        # owner can reword or reorder them without touching code. {contact}
+        # in a rule is replaced with the business's contact number.
+        default_rules = [
+            "Only answer from the business info above. Never invent services, areas, prices, stock, repair times or guarantees.",
+            "Never quote or estimate a price. If asked, say the item is checked in person first and the price is given then, and point them to WhatsApp {contact}.",
+            "For bookings, pickup times, stock, parts, or anything not covered above: tell them to message WhatsApp {contact}.",
+            "Never ask for their name, phone number or email, and never say someone will call them. WhatsApp is the only next step.",
+            "If they ask about something the business doesn't do (for example MacBooks, or areas outside the location), say so plainly and politely.",
+            "Keep replies to 1-2 short sentences. Be friendly and plain, not salesy.",
+        ]
+        rules = data.get("rules") or default_rules
+        rules_text = "\n".join(f"- {r.replace('{contact}', data['contact'])}" for r in rules)
         return f"""You are {data['bot_name']}, the website chat for {data['store_name']}, a {data['business_type']} in {data['location']}.
 
 BUSINESS INFO:
@@ -223,12 +236,7 @@ BUSINESS INFO:
 {business_info}
 
 RULES:
-- Only answer from the business info above. Never invent services, areas, prices, stock, repair times or guarantees.
-- Never quote or estimate a price. If asked, say the item is checked in person first and the price is given then, and point them to WhatsApp {data['contact']}.
-- For bookings, pickup times, stock, parts, or anything not covered above: tell them to message WhatsApp {data['contact']}.
-- Never ask for their name, phone number or email, and never say someone will call them. WhatsApp is the only next step.
-- If they ask about something the business doesn't do (for example MacBooks, or areas outside the location), say so plainly and politely.
-- Keep replies to 1-2 short sentences. Be friendly and plain, not salesy.{language_instruction}"""
+{rules_text}{language_instruction}"""
 
     return f"""You are {data['bot_name']}, a customer service agent for {data['store_name']}, a {data['business_type']} in {data['location']}.
 
@@ -499,7 +507,8 @@ def run_tool(tool_name: str, tool_input: dict, visitor_ip: str = "") -> str:
 @app.route("/")
 def index():
     template = os.environ.get("TEMPLATE_FILE", "index.html")
-    return render_template(template, bot_name=DATA["bot_name"], store_name=DATA["store_name"])
+    return render_template(template, bot_name=DATA["bot_name"], store_name=DATA["store_name"],
+                           greeting=DATA.get("greeting"), quick_replies=DATA.get("quick_replies"))
 
 # EMBEDDABLE WIDGET LOADER — a client pastes <script src=".../embed.js"></script>
 # on their own site. This creates a small floating iframe pointing back at "/"
