@@ -14,7 +14,15 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client, get_default_environment
 
 load_dotenv(override=True)
-assert os.environ.get("ANTHROPIC_API_KEY"), "Missing ANTHROPIC_API_KEY — set it before starting"
+
+# Which AI answers the chat. "anthropic" (default) = Claude, supports lead
+# capture tools. "gemini" = Google Gemini, text answers only, so it is meant
+# for "mode": "whatsapp" data files (no tools). Switch with LLM_PROVIDER.
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic").strip().lower()
+if LLM_PROVIDER == "gemini":
+    assert os.environ.get("GEMINI_API_KEY"), "Missing GEMINI_API_KEY — set it before starting"
+else:
+    assert os.environ.get("ANTHROPIC_API_KEY"), "Missing ANTHROPIC_API_KEY — set it before starting"
 
 app = Flask(__name__)
 
@@ -97,7 +105,37 @@ limiter = Limiter(
     storage_uri=_redis_url or "memory://",
 )
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY")) if LLM_PROVIDER != "gemini" else None
+
+gemini_client = None
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+if LLM_PROVIDER == "gemini":
+    from google import genai
+    from google.genai import types as genai_types
+    gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+    print(f"✓ LLM provider: Gemini ({GEMINI_MODEL})")
+
+def gemini_reply(system_prompt: str, history: list) -> str:
+    """One text-only Gemini call. History is the sanitized text-only
+    user/assistant list; Gemini calls the assistant role "model"."""
+    contents = [
+        genai_types.Content(
+            role="model" if m["role"] == "assistant" else "user",
+            parts=[genai_types.Part(text=m["content"])],
+        )
+        for m in history
+    ]
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=contents,
+        config=genai_types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            max_output_tokens=500,
+            # No tools are passed; this just silences the SDK's AFC warning.
+            automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(disable=True),
+        ),
+    )
+    return (response.text or "").strip()
 
 # ── Stateless conversation history ────────────────────────────────────────────
 # The browser holds the conversation: it sends its text-only history with every
@@ -381,6 +419,8 @@ else:
 if DATA.get("mode") == "whatsapp":
     TOOLS = []
     print("✓ WhatsApp mode: no tools, no lead capture — every next step goes to WhatsApp.")
+elif LLM_PROVIDER == "gemini":
+    print("⚠ Gemini has no tool support here — lead capture is OFF for this business. Use mode 'whatsapp' with Gemini.")
 
 # ── RAG (retrieval-augmented generation) — default OFF ────────────────────────
 # For a client whose real content doesn't fit in business_data.json (a policy
@@ -548,6 +588,26 @@ def chat():
 
     def generate():
         nonlocal history
+        if LLM_PROVIDER == "gemini":
+            try:
+                final_text = gemini_reply(request_system_prompt, history)
+                if not final_text:
+                    final_text = "Sorry, I couldn't answer that. Please message us on WhatsApp."
+                words = final_text.split(" ")
+                for i, word in enumerate(words):
+                    token = word if i == len(words) - 1 else word + " "
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+                client_history.append({"role": "assistant", "content": final_text})
+                trimmed = client_history[-MAX_HISTORY_MESSAGES:]
+                while trimmed and trimmed[0]["role"] != "user":
+                    trimmed = trimmed[1:]
+                yield f"data: {json.dumps({'done': True, 'history': trimmed})}\n\n"
+            except Exception as e:
+                # Never echo the provider's error text to the visitor (it can
+                # include request details). Log it server-side only.
+                print(f"Gemini error: {type(e).__name__}: {e}", flush=True)
+                yield f"data: {json.dumps({'error': 'Chat is busy right now. Please message us on WhatsApp.'})}\n\n"
+            return
         try:
             used_tools = False
 
