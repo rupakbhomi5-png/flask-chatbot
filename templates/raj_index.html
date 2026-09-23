@@ -392,13 +392,13 @@
     </div>
 
     <div class="welcome">
-        👋 Hi! Ask me about products, prices, or anything about the store.
+        👋 Hi! Ask me what we repair, or how laptop pickup works.
     </div>
 
     <div id="chat-box"></div>
 
     <div class="input-area">
-        <input type="text" id="user-input" placeholder="Ask about a product..." autocomplete="off"/>
+        <input type="text" id="user-input" placeholder="Ask about a repair..." autocomplete="off"/>
         <button class="icon-btn" id="mic-btn" onclick="toggleMic()" title="Voice input">🎤</button>
         <button class="icon-btn" id="send-btn" onclick="sendMessage()" title="Send">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -452,11 +452,11 @@
         if (e.data && e.data.type === "rupakco-widget-collapse") closeWidget();
     });
 
-    const GREETING_TEXT = "Hi! 👋 I'm " + BOT_NAME + ". Ask me about products, prices, or anything about the store.";
+    const GREETING_TEXT = "Hi! 👋 Ask me what we repair or how pickup works. For prices, we check the item in person first.";
     const QUICK_REPLIES = [
-        { label: "🛒 Browse products", msg: "What products do you have?" },
-        { label: "💰 Check pricing", msg: "Can you tell me about pricing?" },
-        { label: "💬 General question", msg: "I have a general question" }
+        { label: "💻 Laptop repair", msg: "Do you repair laptops?" },
+        { label: "🚚 Home pickup", msg: "Do you pick up the laptop from home?" },
+        { label: "🖨️ Printer or other repair", msg: "What else do you repair?" }
     ];
 
     // Theme: explicit choice in localStorage wins, otherwise follow system preference.

@@ -170,6 +170,27 @@ def build_system_prompt(data: dict) -> str:
         f"\n\nLEAD CAPTURE RULES:\n{data['lead_qualification']}"
         if "lead_qualification" in data else ""
     )
+    # WhatsApp mode: the bot only answers from the business info and hands
+    # everything else to the owner's WhatsApp. No lead capture, no promised
+    # calls (the owner doesn't take English phone calls), no prices.
+    if data.get("mode") == "whatsapp":
+        return f"""You are {data['bot_name']}, the website chat for {data['store_name']}, a {data['business_type']} in {data['location']}.
+
+BUSINESS INFO:
+- Hours: {data['hours']}
+- Location: {data['location']}
+- Contact: {data['contact']}
+
+{business_info}
+
+RULES:
+- Only answer from the business info above. Never invent services, areas, prices, stock, repair times or guarantees.
+- Never quote or estimate a price. If asked, say the item is checked in person first and the price is given then, and point them to WhatsApp {data['contact']}.
+- For bookings, pickup times, stock, parts, or anything not covered above: tell them to message WhatsApp {data['contact']}.
+- Never ask for their name, phone number or email, and never say someone will call them. WhatsApp is the only next step.
+- If they ask about something the business doesn't do (for example MacBooks, or areas outside the location), say so plainly and politely.
+- Keep replies to 1-2 short sentences. Be friendly and plain, not salesy.{language_instruction}"""
+
     return f"""You are {data['bot_name']}, a customer service agent for {data['store_name']}, a {data['business_type']} in {data['location']}.
 
 BUSINESS INFO:
@@ -357,6 +378,10 @@ else:
     TOOLS = [LEAD_CAPTURE_TOOL]
     print("⚠ MCP_ENABLED=false — products/services/FAQ answered from system prompt, lead capture active.")
 
+if DATA.get("mode") == "whatsapp":
+    TOOLS = []
+    print("✓ WhatsApp mode: no tools, no lead capture — every next step goes to WhatsApp.")
+
 # ── RAG (retrieval-augmented generation) — default OFF ────────────────────────
 # For a client whose real content doesn't fit in business_data.json (a policy
 # doc, a long FAQ, a service catalog longer than a prompt should carry) —
@@ -535,7 +560,8 @@ def chat():
                     # "max_tokens" → malformed capture).
                     max_tokens=500,
                     system=request_system_prompt,
-                    tools=TOOLS,
+                    # WhatsApp mode has no tools; the API rejects tools=[].
+                    **({"tools": TOOLS} if TOOLS else {}),
                     messages=history,
                 )
                 if response.stop_reason != "tool_use":
