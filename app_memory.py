@@ -20,9 +20,10 @@ load_dotenv(override=True)
 # for "mode": "whatsapp" data files (no tools). Switch with LLM_PROVIDER.
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic").strip().lower()
 if LLM_PROVIDER == "gemini":
-    assert os.environ.get("GEMINI_API_KEY"), "Missing GEMINI_API_KEY — set it before starting"
-else:
-    assert os.environ.get("ANTHROPIC_API_KEY"), "Missing ANTHROPIC_API_KEY — set it before starting"
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise SystemExit("Missing GEMINI_API_KEY — set it before starting")
+elif not os.environ.get("ANTHROPIC_API_KEY"):
+    raise SystemExit("Missing ANTHROPIC_API_KEY — set it before starting")
 
 app = Flask(__name__)
 
