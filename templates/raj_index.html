@@ -450,6 +450,9 @@
     if (IS_EMBED) {
         document.querySelector(".chat-container").style.display = "none";
         document.getElementById("launcher-bubble").style.display = "flex";
+        // Tell embed.js the real bubble is ready, so it can swap out the
+        // placeholder it drew while this server was waking up.
+        if (window.parent !== window) window.parent.postMessage({ type: "rupakco-widget-ready" }, "*");
     }
 
     // Clicking outside the widget (on the client's own page) collapses it
@@ -457,6 +460,8 @@
     // detects the outside click and relays this message in.
     window.addEventListener("message", function (e) {
         if (e.data && e.data.type === "rupakco-widget-collapse") closeWidget();
+        // The visitor tapped the placeholder bubble before this chat was ready.
+        if (e.data && e.data.type === "rupakco-widget-open") openWidget();
     });
 
     // Greeting and quick buttons come from the data file ("greeting",
