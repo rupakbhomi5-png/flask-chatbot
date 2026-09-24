@@ -2,9 +2,9 @@
     "mode": "whatsapp",
     "bot_name": "Raj Cassette's website assistant",
     "store_name": "Raj Cassette",
-    "business_type": "local electronics shop and repair service",
+    "business_type": "local electronics shop (selling and repairing electronic goods since 1996)",
     "location": "Sukuldhoka, Bhaktapur, Nepal",
-    "hours": "Not listed here. Ask on WhatsApp.",
+    "hours": "Sunday to Friday, 9am to 7pm. Closed on Saturday.",
     "contact": "984-0270440",
     "whatsapp_number": "9779840270440",
     "greeting": "Hi! 👋 Ask me what we repair or how pickup works. For prices, we check the item in person first.",
@@ -38,9 +38,10 @@
             "items": [
                 "Windows laptops: screen, battery, keyboard, RAM, and software problems (slow laptop, Windows problems, virus cleanup)",
                 "Printers: small printer problems only. The customer should send the exact printer model and the problem on WhatsApp first",
-                "Speakers, repaired in-house at the shop",
+                "Speakers and amplifiers, repaired in-house at the shop",
+                "Fans and heaters, repaired in-house at the shop",
                 "Induction cooktops and infrared cookers, repaired in-house at the shop",
-                "Mixers and similar small kitchen appliances, repaired in-house at the shop"
+                "Mixers and grinders, repaired in-house at the shop"
             ]
         },
         {
@@ -54,7 +55,7 @@
             "items": [
                 "Every item is checked in person before any price is given. No prices are quoted on chat or WhatsApp without seeing the item",
                 "Laptops: bring it to the shop in Sukuldhoka, or we pick it up from the customer's home anywhere inside Bhaktapur and drop it back after the repair",
-                "Speakers, cookers and mixers: bring the item to the shop",
+                "Speakers, amplifiers, fans, heaters, cookers, mixers and grinders: bring the item to the shop",
                 "For expensive parts that have to be ordered, we confirm with the customer before ordering",
                 "Service area: Bhaktapur only"
             ]
@@ -72,6 +73,10 @@
         {
             "q": "Do you have cartridges for my printer?",
             "a": "Send the exact printer model on WhatsApp first. Cartridges only fit specific models."
+        },
+        {
+            "q": "What are your opening hours?",
+            "a": "Sunday to Friday, 9am to 7pm. Closed on Saturday."
         }
     ]
 }
