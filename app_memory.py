@@ -123,6 +123,9 @@ client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY")) if LLM
 
 gemini_client = None
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+# Second model, used only when the first is busy (5xx) or out of quota (429).
+# Set GEMINI_FALLBACK_MODEL="" on Render to switch the fallback off.
+GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
 if LLM_PROVIDER == "gemini":
     from google import genai
     from google.genai import types as genai_types
@@ -161,17 +164,41 @@ def gemini_reply(system_prompt: str, history: list) -> str:
         )
         for m in history
     ]
-    response = gemini_client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=contents,
-        config=genai_types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            max_output_tokens=500,
-            # No tools are passed; this just silences the SDK's AFC warning.
-            automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(disable=True),
-        ),
+    config = genai_types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        max_output_tokens=500,
+        # No tools are passed; this just silences the SDK's AFC warning.
+        automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(disable=True),
     )
-    return (response.text or "").strip()
+
+    def call(model):
+        response = gemini_client.models.generate_content(model=model, contents=contents, config=config)
+        return (response.text or "").strip()
+
+    # Google's free models sometimes answer 503 "high demand" for a minute or
+    # two (seen live 2026-09-24 20:18). Retry that once, then try a second
+    # model before the visitor gets the WhatsApp fallback. A 429 (quota) is
+    # per model, so it skips the retry and goes to the second model. Anything
+    # else (bad key, bad request) is not retried.
+    try:
+        return call(GEMINI_MODEL)
+    except Exception as e:
+        code = getattr(e, "code", None)
+        busy = isinstance(code, int) and code >= 500
+        quota = code == 429 or "RESOURCE_EXHAUSTED" in str(e)
+        if not (busy or quota) or not GEMINI_FALLBACK_MODEL:
+            raise
+        print(f"Gemini [{gemini_error_kind(e)}] on {GEMINI_MODEL}, retrying", flush=True)
+    if busy:
+        time.sleep(2)
+        try:
+            return call(GEMINI_MODEL)
+        except Exception as e:
+            code = getattr(e, "code", None)
+            if not (isinstance(code, int) and code >= 500 or code == 429 or "RESOURCE_EXHAUSTED" in str(e)):
+                raise
+            print(f"Gemini [{gemini_error_kind(e)}] on {GEMINI_MODEL} again, trying {GEMINI_FALLBACK_MODEL}", flush=True)
+    return call(GEMINI_FALLBACK_MODEL)
 
 # ── Stateless conversation history ────────────────────────────────────────────
 # The browser holds the conversation: it sends its text-only history with every
@@ -639,6 +666,50 @@ _EMBED_LOADER_JS = """(function () {
   }, 90000);
 
   var isOpen = false;
+  var OPEN_DESKTOP =
+    "position:fixed;bottom:20px;right:20px;width:380px;height:min(640px,80vh);border:none;border-radius:16px;" +
+    "box-shadow:0 8px 32px rgba(0,0,0,.3);z-index:2147483000;background:transparent;" +
+    "transition:width .2s ease,height .2s ease,border-radius .2s ease;";
+  // Phones: a sheet 88% of the screen tall, not full screen, so a dimmed strip
+  // of the page stays visible above it. Tapping that strip closes the chat.
+  var OPEN_PHONE =
+    "position:fixed;left:0;right:0;bottom:0;width:100vw;height:88dvh;border:none;border-radius:16px 16px 0 0;" +
+    "box-shadow:0 -8px 32px rgba(0,0,0,.3);z-index:2147483000;background:transparent;" +
+    "transition:width .2s ease,height .2s ease,border-radius .2s ease;";
+
+  var backdrop = document.createElement("div");
+  backdrop.setAttribute("aria-hidden", "true");
+  backdrop.style.cssText =
+    "position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:2147482999;display:none;";
+  document.body.appendChild(backdrop);
+
+  // One place that opens or closes the widget. fromBack = the phone's Back
+  // button already removed our history entry, so don't remove it again.
+  function setOpen(open, fromBack) {
+    if (open === isOpen) return;
+    isOpen = open;
+    if (open) {
+      var phone = window.matchMedia("(max-width: 480px)").matches;
+      iframe.style.cssText = phone ? OPEN_PHONE : OPEN_DESKTOP;
+      backdrop.style.display = phone ? "block" : "none";
+      // Back button closes the chat instead of leaving the site.
+      try { history.pushState({ rupakcoChat: true }, ""); } catch (err) {}
+    } else {
+      iframe.style.cssText = CLOSED_CSS;
+      // Keep the strip up a moment so the closing tap can't fall through
+      // onto a link underneath it.
+      setTimeout(function () { if (!isOpen) backdrop.style.display = "none"; }, 350);
+      if (!fromBack && history.state && history.state.rupakcoChat) {
+        try { history.back(); } catch (err) {}
+      }
+    }
+  }
+
+  function collapse(fromBack) {
+    if (!isOpen) return;
+    setOpen(false, fromBack);
+    iframe.contentWindow.postMessage({ type: "rupakco-widget-collapse" }, "*");
+  }
 
   window.addEventListener("message", function (e) {
     if (e.source !== iframe.contentWindow) return;
@@ -653,29 +724,21 @@ _EMBED_LOADER_JS = """(function () {
       return;
     }
     if (e.data.type !== "rupakco-widget-resize") return;
-    isOpen = e.data.state === "open";
-    var mobile = window.matchMedia("(max-width: 480px)").matches;
-    if (isOpen) {
-      iframe.style.cssText = mobile
-        ? "position:fixed;bottom:0;right:0;width:100vw;height:100dvh;border:none;border-radius:0;box-shadow:none;z-index:2147483000;background:transparent;transition:width .2s ease,height .2s ease,border-radius .2s ease;"
-        : "position:fixed;bottom:20px;right:20px;width:380px;height:min(640px,80vh);border:none;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.3);z-index:2147483000;background:transparent;transition:width .2s ease,height .2s ease,border-radius .2s ease;";
-    } else {
-      iframe.style.cssText = CLOSED_CSS;
-    }
+    setOpen(e.data.state === "open");
   });
+
+  window.addEventListener("popstate", function () { collapse(true); });
+  backdrop.addEventListener("click", function () { collapse(false); });
 
   // Clicking anywhere on the host page outside the iframe collapses the
   // widget back to the bubble. A click landing inside the iframe never
   // reaches this listener (it's a separate document), so any mousedown
-  // seen here is, by definition, an outside click — no coordinate math needed.
+  // seen here is, by definition, an outside click.
   document.addEventListener("mousedown", function (e) {
     if (note && ready === false && !placeholder.contains(e.target) && !note.contains(e.target)) {
       note.remove(); note = null; pendingOpen = false;
     }
-    if (!isOpen) return;
-    isOpen = false;
-    iframe.style.cssText = CLOSED_CSS;
-    iframe.contentWindow.postMessage({ type: "rupakco-widget-collapse" }, "*");
+    collapse(false);
   });
 })();"""
 

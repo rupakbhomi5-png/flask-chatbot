@@ -374,6 +374,11 @@
             100% { box-shadow: 0 0 0 0 rgba(255,77,77,0); }
         }
         .close-widget-btn { display: none; }
+        /* A clear, thumb-sized Close button (2026-09-24: the old 30px round
+           ✕ was easy to miss on phones, where the chat fills most of the screen). */
+        .theme-btn.close-widget-btn { width: auto; height: 34px; padding: 0 14px; border-radius: 999px;
+            gap: 6px; font-size: 14px; font-weight: 600; background: rgba(255,255,255,0.22);
+            white-space: nowrap; flex-shrink: 0; }
     </style>
 </head>
 <body>
@@ -392,7 +397,7 @@
             </div>
         </div>
         <div class="header-right">
-            <button class="theme-btn close-widget-btn" id="close-widget-btn" onclick="closeWidget()" title="Close">✕</button>
+            <button class="theme-btn close-widget-btn" id="close-widget-btn" onclick="closeWidget()" title="Close chat" aria-label="Close chat">Close ✕</button>
             <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" title="Toggle dark mode">🌙</button>
             <button class="reset-btn" onclick="resetChat()">New chat</button>
         </div>
