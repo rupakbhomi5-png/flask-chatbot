@@ -3,6 +3,7 @@ import hmac
 import time
 import sys
 import json
+import re
 import asyncio
 import threading
 import urllib.request
@@ -36,6 +37,16 @@ def redirect_to_https():
         # silently break /chat for any visitor arriving over http.
         return redirect(url, code=308)
 
+def embed_origins() -> str:
+    """Which websites may show the chat bubble. Set "embed_origins" in the
+    data file (e.g. ["https://rajcassette.rupakco.com"]) to lock it to the
+    client's own site; without it, any site may embed it (demo default).
+    Anything that isn't a plain https://host is dropped, so a typo in the
+    data file can't inject extra policy text."""
+    allowed = [o for o in (DATA.get("embed_origins") or [])
+               if isinstance(o, str) and re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?", o)]
+    return " ".join(allowed) if allowed else "*"
+
 @app.after_request
 def set_security_headers(response):
     # Templates use inline <script>/<style> (no external JS/CSS files) and
@@ -44,9 +55,9 @@ def set_security_headers(response):
     #
     # EMBED WIDGET EXCEPTION: "/" with ?embed=1 is the iframe the /embed.js
     # loader creates so a client can embed the chatbot on their own site.
-    # That specific response needs to be frameable from any third-party
-    # domain (the client's site is never known in advance) — every other
-    # response keeps the locked-down default. Scoped narrowly on purpose,
+    # That specific response may be framed only by the sites listed in the
+    # data file's "embed_origins" (any site if none are listed, for demos);
+    # every other response keeps the locked-down default. Scoped narrowly on purpose,
     # per CSP FAILSAFE's "only per specific domain/feature when built" rule.
     is_embed_iframe = request.path == "/" and request.args.get("embed") == "1"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -54,8 +65,8 @@ def set_security_headers(response):
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
-    frame_ancestors = "frame-ancestors *; " if is_embed_iframe else "frame-ancestors 'none'; "
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
+    frame_ancestors = f"frame-ancestors {embed_origins()}; " if is_embed_iframe else "frame-ancestors 'none'; "
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline'; "
